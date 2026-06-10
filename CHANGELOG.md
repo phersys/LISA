@@ -2,127 +2,43 @@
 
 ## Key Features
 
-### Session Refactor: Dedicated Messages Table with Context Compaction
-A major architectural refactor of the LISA sessions system introduces a dedicated DynamoDB Messages table, separating message storage from session metadata storage. Previously, all chat messages were stored directly within the Sessions DynamoDB table; messages are now stored as individual records in a separate Messages table, while the Sessions table is reserved exclusively for session-level metadata.
+### Dedicated Messages Table with Context Compaction
 
-**Key capabilities:**
-- **Message Storage**: Each message exists as its own independent record in the new Messages DynamoDB table, improving scalability and query flexibility
-- **Context Window Compaction**: As a user approaches  utilization of a model's context window, sessions are automatically compacted and summarized to prevent context overflow
-- **Summary Visibility**: Compaction summaries are visible directly in the UI and are appended to the end of the system prompt, giving users full transparency into context management
-- **Session Metadata**: The Sessions table continues to serve as the authoritative store for session-level metadata, providing a clean separation of concerns between messages and sessions
+Chat message storage has been refactored into a dedicated DynamoDB Messages table, separating message storage from session metadata. Each message is now an independent record, improving scalability and query flexibility, while the Sessions table serves exclusively as the store for session-level metadata.
 
----
+Building on this, sessions are now automatically compacted and summarized as users approach 75% of a model's context window, preventing context overflow. Compaction summaries are visible directly in the UI and appended to the system prompt, giving users full transparency into context management.
 
-### OpenSearch Hybrid RAG
-Introduces hybrid search support for OpenSearch-backed RAG (Retrieval-Augmented Generation) pipelines, combining vector similarity search with keyword-based search to improve retrieval quality and relevance across a broader range of query types.
+### Hybrid Search for RAG
 
----
+LISA now supports hybrid search, combining vector similarity search with keyword-based search to improve retrieval quality across a broader range of query types:
 
-### Hybrid Search Support for Bedrock Knowledge Bases
-Extends hybrid search capabilities to Amazon Bedrock Knowledge Base repositories, enabling both vector and keyword search to work in tandem when querying Bedrock KB-backed repositories.
+- OpenSearch-backed RAG repositories support hybrid search pipelines.
+- Bedrock Knowledge Base repositories support hybrid search with an admin toggle that acts as a hard gate — disabling it forces vector-only search for all sessions.
+- The search mode selector only appears in the UI when the repository supports hybrid search, and unsupported knowledge bases automatically fall back to vector-only search.
 
-**Key behaviors:**
-- **Admin Gate**: The admin toggle acts as a hard gate — disabling hybrid search forces all sessions to use vector-only search, regardless of individual user selection
-- **Conditional UI**: The search mode selector is displayed in the UI only when the repository supports hybrid search, keeping the interface clean for non-hybrid configurations
-- **Automatic Fallback**: Unsupported knowledge bases automatically fall back to vector-only search, ensuring compatibility across all Bedrock KB configurations
-- **Citation Display**: Citations are rendered correctly under both hybrid and vector-only search modes
+## Other Key Changes
 
----
+- Refactored and cleaned up the Lambda function implementation for improved code organization and module resolution
+- Updated the default hosted instance type so new deployments use an optimized instance configuration out of the box
 
-### Image Generation with Context Fix
-Resolves two related issues with image generation in the chat interface when contextual references are present:
-- **Image Reference During Generation**: Fixed an issue where the chat was not correctly referencing an attached image during the image generation workflow
-- **Reference Cleanup**: Fixed an issue where removing an image reference was not properly clearing other associated references, causing stale context to persist in subsequent interactions
+## Bug Fixes
 
----
-
-### React Compiler Enabled
-The React compiler has been enabled for the LISA frontend, providing automatic memoization and optimization of React component rendering without requiring manual , , or  annotations.
-
-**Supporting changes:**
-- **Linting Updates**: Updated linting configuration to align with React compiler requirements and enforce compatible coding patterns
-- **LiteLLM Config Passthrough**: Updated the LiteLLM configuration passthrough logic to resolve compatibility issues surfaced during the compiler migration
-
----
-
-### Lambda Refactor and Cleanup
-A comprehensive cleanup and refactoring of the Lambda function implementation improves code organization, maintainability, and module resolution across the serverless backend.
-
-**Component updates:**
-- **Module Path Fix (Batch Ingestion)**: Updated the Batch ingestion job container command from  to  to align with the new module layout established by the lambda refactor
-- **Python Path Resolution**: Added  to the Batch ingestion container environment so the shared  package is correctly importable at runtime
-- **CDK Snapshots**: Updated CDK snapshot baselines for , , and  stacks to reflect the refactored module structure
-
----
-
-### DynamoDB Decimal Serialization Fix
-Resolves a bug in the session API where DynamoDB  values were being incorrectly serialized as strings in API responses instead of JSON numbers.
-
-**Root cause and fix:**
-- **Problem**: All numbers stored in DynamoDB are returned by boto3 as Python  objects. When Pydantic models with -typed fields (e.g., ) were serialized using , the  method would convert  values to strings
-- **Fix**: Changed  to  at two call sites in , ensuring  values are properly represented as JSON numbers in all API responses
-
----
-
-### MCP Server Deployment Fixes
-Resolved multiple deployment and runtime issues affecting the MCP (Model Context Protocol) server:
-
-- **CORS Allowed Origins**: Fixed the  configuration for MCP server deployments to ensure cross-origin requests are correctly permitted
-- **MCP Workbench Error**: Fixed an error introduced during the MCP Workbench upgrade that was causing runtime failures
-- **Client Issues**: Resolved various client-side issues identified during MCP integration testing and deployment validation
-
----
-
-### AWS Credentials and Environment Variable Improvements
-Enhancements to AWS credential parsing and environment configuration improve compatibility and flexibility for diverse deployment scenarios:
-
-- **Export Block Credential Parsing**: Added support for parsing AWS credentials provided in `export` block format, broadening the range of credential input styles that LISA can process
-- **ENV_VAR Helper Indentation Fix**: Corrected an indentation issue in the  ENV_VAR helper that was causing formatting and parsing inconsistencies
-- **Default AWS Session Region**: Fixed the default AWS session region parameter to ensure correct region resolution when no explicit region is provided
-
----
-
-### Default Hosted Instance Type Update
-Updated the default hosted instance type to a more appropriate default, ensuring new deployments use an optimized instance configuration out of the box without requiring manual override.
-
----
-
-### Automated PR Description Script Updates
-Iterative improvements to the automated pull request description generation script, refining the tooling used to produce consistent and comprehensive release notes across LISA releases.
-
----
-
-## Key Changes
-- **Architecture**: Migrated chat message storage from the Sessions DynamoDB table to a dedicated Messages DynamoDB table, with the Sessions table now serving exclusively as a metadata store
-- **Context Management**: Implemented automatic session compaction and summarization at  context window utilization, with summary visibility in the UI and system prompt
-- **RAG**: Added hybrid search (vector + keyword) support for OpenSearch-backed RAG pipelines
-- **RAG**: Added hybrid search support for Bedrock Knowledge Base repositories with admin-controlled gating, automatic fallback, and conditional UI rendering
-- **Bug Fix**: Resolved image generation issue where attached images were not correctly referenced during generation and where removing image references left stale context
-- **Bug Fix**: Fixed DynamoDB  values being serialized as strings in session API responses by switching from  to  in 
-- **Bug Fix**: Updated Batch ingestion container module path from  to  following lambda refactor
-- **Bug Fix**: Added  to Batch ingestion container environment to resolve shared package import failures
-- **Bug Fix**: Fixed  configuration for MCP server deployments
-- **Bug Fix**: Fixed MCP Workbench error introduced during upgrade
-- **Bug Fix**: Corrected ENV_VAR helper indentation in 
-- **Bug Fix**: Fixed default AWS session region parameter resolution
-- **Frontend**: Enabled the React compiler for automatic component optimization and memoization
-- **Frontend**: Updated linting rules to align with React compiler compatibility requirements
-- **Frontend**: Fixed LiteLLM config passthrough behavior
-- **Infrastructure**: Updated default hosted instance type for new deployments
-- **Infrastructure**: Refactored and cleaned up Lambda function implementation for improved maintainability
-- **Infrastructure**: Updated CDK snapshot baselines for , , and  stacks
-- **Credentials**: Added support for parsing AWS credentials in `export` block format
-- **Tooling**: Updated automated PR description generation script
+- Fixed image generation not correctly referencing attached images, and removing an image reference now properly clears associated references
+- Fixed DynamoDB `Decimal` values being serialized as strings instead of JSON numbers in session API responses
+- Updated the Batch ingestion job container to use the `lisa.rag.pipeline_ingestion` module path and added `PYTHONPATH` so the shared package resolves at runtime
+- Fixed `corsAllowedOrigins` configuration for MCP server deployments and resolved an error introduced during the MCP Workbench upgrade
+- Corrected an indentation issue in the ENV_VAR helper and fixed default AWS session region resolution
+- Fixed LiteLLM config passthrough behavior
 
 ## Acknowledgements
-* @121983012+jmharold
-* @32586639+gingerknight
 * @bedanley
 * @drduhe
 * @estohlmann
-* @evmann
+* @gingerknight
+* @jmharold
 
 **Full Changelog**: https://github.com/awslabs/LISA/compare/v6.6.0..v6.7.0
+
 
 # v6.6.0
 
