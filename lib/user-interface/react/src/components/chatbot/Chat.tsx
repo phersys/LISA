@@ -43,9 +43,12 @@ import { useGetAllModelsQuery } from '@/shared/reducers/model-management.reducer
 import { ModelStatus, ModelType } from '@/shared/model/model-management.model';
 import {
     useAttachImageToSessionMutation,
+    useCompactSessionMutation,
     useGetSessionHealthQuery,
+    useLazyGetMessagesQuery,
     useLazyGetSessionByIdQuery,
     useListSessionsQuery,
+    usePostMessagesMutation,
     useUpdateSessionMutation,
 } from '@/shared/reducers/session.reducer';
 import { useAppDispatch, useAppSelector } from '@/config/store';
@@ -119,7 +122,19 @@ export default function Chat ({ sessionId, initialStack }) {
     const { data: sessionHealth } = useGetSessionHealthQuery();
     const [getSessionById] = useLazyGetSessionByIdQuery();
     const [updateSession] = useUpdateSessionMutation();
+    const [postMessages] = usePostMessagesMutation();
     const [attachImageToSession] = useAttachImageToSessionMutation();
+    const [compactSession] = useCompactSessionMutation();
+
+    // Track how many messages have been persisted to the messages table
+    const lastSavedIndexRef = useRef(-1);
+
+    // Pagination: track cursor for loading older messages
+    const [olderMessagesCursor, setOlderMessagesCursor] = useState<string | null>(null);
+    const [hasOlderMessages, setHasOlderMessages] = useState(false);
+    const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+    const topSentinelRef = useRef<HTMLDivElement>(null);
+    const [getMessages] = useLazyGetMessagesQuery();
     const { data: allModelsRaw, isFetching: isFetchingModels } = useGetAllModelsQuery();
 
     const allModels = useMemo(() =>
@@ -186,6 +201,7 @@ export default function Chat ({ sessionId, initialStack }) {
     const [fileContextName, setFileContextName] = useState('');
     const [fileContextFiles, setFileContextFiles] = useState<Array<{name: string, content: string}>>([]);
     const [dirtySession, setDirtySession] = useState(false);
+    const [isCompacting, setIsCompacting] = useState(false);
     const [useRag, setUseRag] = useState(false);
     const [preferences, setPreferences] = useState<UserPreferences>(undefined);
     const [modelFilterValue, setModelFilterValue] = useState('');
@@ -614,7 +630,7 @@ export default function Chat ({ sessionId, initialStack }) {
         setModelFilterValue(selectedModel?.modelId ?? '');
     }
 
-    const { memory, metadata } = useMemory(
+    const { metadata } = useMemory(
         session,
         chatConfiguration,
         selectedModel,
@@ -776,7 +792,6 @@ export default function Chat ({ sessionId, initialStack }) {
         session,
         setSession,
         metadata,
-        memory,
         openAiTools: (config?.configuration?.enabledComponents?.mcpConnections
             || config?.configuration?.enabledComponents?.bedrockAgents)
             ? openAiTools
@@ -932,7 +947,7 @@ export default function Chat ({ sessionId, initialStack }) {
                     if (canPersistAssistantTurn) {
                         setDirtySession(false);
                         const message = session.history.at(-1);
-                        if (session.history.at(-1).metadata.imageGeneration && Array.isArray(session.history.at(-1).content)) {
+                        if (session.history.at(-1).metadata?.imageGeneration && Array.isArray(session.history.at(-1).content)) {
                             // Session was updated and response contained images that need to be attached to the session
                             await Promise.all(
                                 (Array.isArray(message.content) ? message.content : []).map(async (content: { type?: string; image_url?: { url?: string; s3_key?: string } }) => {
@@ -954,19 +969,61 @@ export default function Chat ({ sessionId, initialStack }) {
                                 })
                             );
                         }
-                        const updatedHistory = [...session.history.slice(0, -1), message];
 
+                        // Determine which messages are new (unsaved) since last persist
+                        const newMessages = session.history.slice(lastSavedIndexRef.current + 1);
                         const assistantId = chatAssistantId || effectiveStack?.stackId;
-                        updateSession({
-                            ...session,
-                            history: updatedHistory,
-                            configuration: {
-                                ...chatConfiguration,
-                                selectedModel: selectedModel,
-                                ragConfig: ragConfig,
-                                ...(assistantId ? { chatAssistantId: assistantId } : {}),
-                            },
-                        });
+
+                        if (newMessages.length > 0) {
+                            // Generate a session name only for the new sessions
+                            let sessionName: string | undefined = undefined;
+                            if (!session.name) {
+                                const firstHuman = newMessages.find((m) => m.type === 'human' || m.type === MessageTypes.HUMAN);
+                                if (firstHuman) {
+                                    const text = typeof firstHuman.content === 'string'
+                                        ? firstHuman.content
+                                        : Array.isArray(firstHuman.content)
+                                            ? (firstHuman.content.filter((c) => c?.text).pop()?.text || '')
+                                            : '';
+                                    sessionName = text.slice(0, 50) || 'New Chat';
+                                    setSession((prev) => ({ ...prev, name: sessionName }));
+                                }
+                            }
+
+                            // Use the new postMessages endpoint for incremental writes.
+                            // Await + advance lastSavedIndex only on success
+                            try {
+                                await postMessages({
+                                    sessionId: session.sessionId,
+                                    messages: newMessages.map((msg) => ({
+                                        type: msg.type,
+                                        content: msg.content,
+                                        metadata: msg.metadata,
+                                        toolCalls: msg.toolCalls,
+                                        usage: msg.usage,
+                                        guardrailTriggered: msg.guardrailTriggered,
+                                        reasoningContent: msg.reasoningContent,
+                                        reasoningSignature: msg.reasoningSignature,
+                                    })),
+                                    configuration: {
+                                        ...chatConfiguration,
+                                        selectedModel: selectedModel,
+                                        ragConfig: ragConfig,
+                                        ...(assistantId ? { chatAssistantId: assistantId } : {}),
+                                    },
+                                    name: sessionName,
+                                }).unwrap();
+                                // Advance to the current end of history (which may have grown
+                                // during the await) so we don't re-persist anything we've already saved.
+                                lastSavedIndexRef.current = session.history.length - 1;
+                            } catch {
+                                notificationService.generateNotification(
+                                    'Failed to save messages. Will retry on next send.',
+                                    'warning',
+                                );
+                                setDirtySession(true);
+                            }
+                        }
                     }
                 }
 
@@ -1025,45 +1082,58 @@ export default function Chat ({ sessionId, initialStack }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isRunning, isStreaming, session.history.length, dirtySession, chatConfiguration, chatAssistantId, effectiveStack?.stackId]);
 
-    // Re-enable auto-scroll the moment a session is ready. Detected during
-    // render with the "adjusting state while rendering" pattern so we don't
-    // call setShouldAutoScroll directly from a useEffect body.
-    const sessionLoadedKey = (!loadingSession && session.history.length > 0 && sessionId)
-        ? `${sessionId}|${session.history.length}`
-        : null;
-    const [lastSessionLoadedKey, setLastSessionLoadedKey] = useState<string | null>(null);
-    if (sessionLoadedKey && sessionLoadedKey !== lastSessionLoadedKey) {
-        setLastSessionLoadedKey(sessionLoadedKey);
-        setShouldAutoScroll(true);
-    }
-
-    // Schedule multiple scroll attempts once a session is ready. For sessions
-    // with images we need several attempts because:
-    // - Base64 images load instantly (synchronously)
-    // - Cached images load very quickly
-    // - The browser needs time to reflow the layout with image dimensions
+    // When session ID changes (navigation to different session), reset lastSavedIndex
     useEffect(() => {
-        if (loadingSession || session.history.length === 0 || !sessionId) return;
-        const scrollToBottom = () => {
-            if (scrollContainerRef.current) {
-                scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+        lastSavedIndexRef.current = -1;
+    }, [sessionId]);
+
+    // When session finishes loading, capture pagination cursor and enable auto-scroll
+    useEffect(() => {
+        if (!loadingSession && session.history.length > 0 && sessionId) {
+            // Only reset lastSavedIndex if it hasn't been updated yet for this session load
+            if (lastSavedIndexRef.current === -1) {
+                lastSavedIndexRef.current = session.history.length - 1;
             }
-        };
-        const delays = [0, 50, 150, 300, 500];
-        const timeoutIds = delays.map((delay) => setTimeout(scrollToBottom, delay));
-        return () => {
-            timeoutIds.forEach((id) => clearTimeout(id));
-        };
-    }, [loadingSession, sessionId, session.history.length]);
+
+            // Capture pagination info from the session response (v2.0 sessions)
+            const sess = session as any;
+            if (sess.nextCursor !== undefined) {
+                setOlderMessagesCursor(sess.nextCursor);
+                setHasOlderMessages(sess.hasMoreMessages || false);
+            }
+
+            // Re-enable auto-scroll when a session is loaded
+            setShouldAutoScroll(true);
+
+            // For sessions with images, we need multiple scroll attempts because:
+            // - Base64 images load instantly (synchronously)
+            // - Cached images load very quickly
+            // - The browser needs time to reflow the layout with image dimensions
+            const scrollToBottom = () => {
+                if (scrollContainerRef.current) {
+                    scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+                }
+            };
+
+            // Multiple scroll attempts with increasing delays to ensure we reach the bottom
+            // as images fully load and the container height updates
+            const delays = [0, 50, 150, 300, 500];
+            const timeoutIds = delays.map((delay) => setTimeout(scrollToBottom, delay));
+
+            // Cleanup timeouts if component unmounts or effect re-runs
+            return () => {
+                timeoutIds.forEach((id) => clearTimeout(id));
+            };
+        }
+    }, [loadingSession, sessionId]);
 
     useEffect(() => {
         if (shouldAutoScroll && scrollContainerRef.current) {
             // Scroll the container directly to the bottom
-            // This is more reliable than scrollIntoView for ensuring we reach the actual bottom
             const container = scrollContainerRef.current;
             container.scrollTop = container.scrollHeight;
         }
-    }, [isStreaming, session, mermaidRenderComplete, videoLoadComplete, imageLoadComplete, shouldAutoScroll]);
+    }, [isStreaming, session, mermaidRenderComplete, videoLoadComplete, imageLoadComplete, shouldAutoScroll, isCompacting]);
 
     // Scroll event listener to detect scroll position
     useEffect(() => {
@@ -1095,6 +1165,58 @@ export default function Chat ({ sessionId, initialStack }) {
         return () => scrollContainer.removeEventListener('scroll', handleScroll);
     }, [shouldAutoScroll]);
 
+    // IntersectionObserver: load older messages when user scrolls to top
+    useEffect(() => {
+        if (!topSentinelRef.current || !hasOlderMessages || !olderMessagesCursor || !scrollContainerRef.current) return;
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (entry.isIntersecting && !isLoadingOlder && olderMessagesCursor) {
+                    // User scrolled to the top — fetch older messages
+                    setIsLoadingOlder(true);
+                    const scrollContainer = scrollContainerRef.current;
+                    const prevScrollHeight = scrollContainer?.scrollHeight || 0;
+
+                    getMessages({ sessionId: session.sessionId, limit: 50, order: 'desc', cursor: olderMessagesCursor })
+                        .then((result) => {
+                            if (result.data) {
+                                // Update cursor FIRST to prevent re-triggering with same cursor
+                                setOlderMessagesCursor(result.data.nextCursor || null);
+                                setHasOlderMessages(result.data.hasMore === true && !!result.data.nextCursor);
+
+                                if (result.data.messages.length > 0) {
+                                    const olderMessages = [...result.data.messages].reverse(); // Reverse to chronological
+                                    // Prepend older messages to the session history
+                                    setSession((prev) => ({
+                                        ...prev,
+                                        history: [...olderMessages, ...prev.history],
+                                    }));
+                                    // Update lastSavedIndexRef since prepended messages are already saved
+                                    lastSavedIndexRef.current += olderMessages.length;
+
+                                    // Preserve scroll position after prepending
+                                    requestAnimationFrame(() => {
+                                        if (scrollContainer) {
+                                            const newScrollHeight = scrollContainer.scrollHeight;
+                                            scrollContainer.scrollTop = newScrollHeight - prevScrollHeight;
+                                        }
+                                    });
+                                }
+                            }
+                        })
+                        .finally(() => setIsLoadingOlder(false));
+                }
+            },
+            {
+                root: scrollContainerRef.current,
+                threshold: 0.1,
+            }
+        );
+
+        observer.observe(topSentinelRef.current);
+        return () => observer.disconnect();
+    }, [hasOlderMessages, isLoadingOlder, olderMessagesCursor, session.sessionId, getMessages, setSession]);
+
     // Reset tool call counter when session changes
     useEffect(() => {
         consecutiveToolCallCount.current = 0;
@@ -1102,6 +1224,46 @@ export default function Chat ({ sessionId, initialStack }) {
 
     const handleSendGenerateRequest = useCallback(async () => {
         if (!userPrompt.trim()) return;
+
+        // Compaction Check
+        const contextWindow = allModelsRaw?.find(
+            (m) => m.modelId === selectedModel?.modelId
+        )?.contextWindow;
+        const usedTokens = Number(currentSessionSummary?.tokensUsedSinceCompaction ?? currentSessionSummary?.totalTokensUsed) || 0;
+
+        if (contextWindow && usedTokens > 0 && selectedModel?.modelId && session.history.length >= 3) {
+            const ratio = usedTokens / contextWindow;
+            if (ratio >= 0.75) {
+                setIsCompacting(true);
+                setShouldAutoScroll(true);
+                try {
+                    const result = await compactSession({
+                        sessionId: session.sessionId,
+                        modelId: selectedModel.modelId,
+                        contextWindow,
+                    }).unwrap();
+
+                    setSession((prev) => ({
+                        ...prev,
+                        compactionMessageIndex: result.compactionMessageIndex,
+                        history: [...prev.history, new LisaChatMessage({
+                            type: MessageTypes.SUMMARY,
+                            content: result.summaryContent,
+                            metadata: { systemPrompt: result.systemPrompt },
+                        })],
+                    }));
+                    lastSavedIndexRef.current = session.history.length;
+                } catch {
+                    notificationService.generateNotification(
+                        'Session compaction failed. Continuing without compaction.',
+                        'warning'
+                    );
+                } finally {
+                    setIsCompacting(false);
+                }
+            }
+        }
+
         setIsRunning(true);
 
         // Reset tool call counter when human provides input
@@ -1174,12 +1336,34 @@ export default function Chat ({ sessionId, initialStack }) {
             history: prev.history.slice(0, -1).concat(...messages),
         }));
 
+        setUserPrompt('');
+
+        // Build the LLM-ready context array from in-memory session state:
+        //   non-compacted -> entire persisted history
+        //   compacted     -> rebuilt compactedSystemPrompt + messages after the SUMMARY
+        let contextMessages: any[] = session.history;
+        if (typeof (session as any).compactionMessageIndex === 'number') {
+            // Locate the most recent SUMMARY by type — robust to messageIndex/array drift.
+            const lastSummaryIdx = session.history
+                .map((m: any) => m?.type)
+                .lastIndexOf(MessageTypes.SUMMARY);
+            if (lastSummaryIdx >= 0) {
+                const summaryMsg: any = session.history[lastSummaryIdx];
+                const summaryContent = typeof summaryMsg?.content === 'string' ? summaryMsg.content : '';
+                const originalSystemPrompt = summaryMsg?.metadata?.systemPrompt || '';
+                const compactedSystemPrompt = `${originalSystemPrompt}\n\n--- Conversation Summary (prior context) ---\n${summaryContent}`;
+                contextMessages = [
+                    { type: 'system', content: compactedSystemPrompt },
+                    ...session.history.slice(lastSummaryIdx + 1),
+                ];
+            }
+        }
+
         const params: GenerateLLMRequestParams = {
             input: userPrompt,
             message: messages,
+            contextMessages,
         };
-
-        setUserPrompt('');
 
         await generateResponse({
             ...params
@@ -1187,7 +1371,7 @@ export default function Chat ({ sessionId, initialStack }) {
 
         setDirtySession(true);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [userPrompt, useRag, fileContext, chatConfiguration, generateResponse, isImageGenerationMode, isVideoGenerationMode, fetchRelevantDocuments, notificationService]);
+    }, [userPrompt, useRag, fileContext, chatConfiguration, generateResponse, isImageGenerationMode, isVideoGenerationMode, fetchRelevantDocuments, notificationService, compactSession]);
 
     // Ref to track if we're processing a keyboard event
     const isKeyboardEventRef = useRef(false);
@@ -1204,11 +1388,11 @@ export default function Chat ({ sessionId, initialStack }) {
             handleStop();
         } else {
             // Normal send functionality - allow both button clicks and Enter key
-            if (userPrompt.length > 0 && !isRunning && !callingToolName && !loadingSession) {
+            if (userPrompt.length > 0 && !isRunning && !callingToolName && !loadingSession && !isCompacting) {
                 handleSendGenerateRequest();
             }
         }
-    }, [shouldShowStopButton, handleStop, userPrompt.length, isRunning, callingToolName, loadingSession, handleSendGenerateRequest]);
+    }, [shouldShowStopButton, handleStop, userPrompt.length, isRunning, callingToolName, loadingSession, isCompacting, handleSendGenerateRequest]);
 
     // Handle Enter key press
     const handleKeyPress = useCallback((event: any) => {
@@ -1221,7 +1405,7 @@ export default function Chat ({ sessionId, initialStack }) {
                 // Do nothing for stop button when Enter is pressed
             } else {
                 // Normal send functionality for Enter key
-                if (userPrompt.length > 0 && !isRunning && !callingToolName && !loadingSession) {
+                if (userPrompt.length > 0 && !isRunning && !callingToolName && !loadingSession && !isCompacting) {
                     handleSendGenerateRequest();
                 }
             }
@@ -1231,7 +1415,7 @@ export default function Chat ({ sessionId, initialStack }) {
                 isKeyboardEventRef.current = false;
             }, 100);
         }
-    }, [shouldShowStopButton, userPrompt.length, isRunning, callingToolName, loadingSession, handleSendGenerateRequest]);
+    }, [shouldShowStopButton, userPrompt.length, isRunning, callingToolName, loadingSession, isCompacting, handleSendGenerateRequest]);
 
     const getButtonItemsWithAssistantMode = useCallback((...args: Parameters<typeof getButtonItems>) => {
         const [config, useRag, isImageGen, isVideoGen, isConnected, isModelDel, showMd] = args;
@@ -1246,6 +1430,7 @@ export default function Chat ({ sessionId, initialStack }) {
         isConnected,
         selectedModel,
         loadingSession,
+        isCompacting,
         isImageGenerationMode,
         isVideoGenerationMode,
         fileContext,
@@ -1270,6 +1455,7 @@ export default function Chat ({ sessionId, initialStack }) {
         isConnected,
         selectedModel,
         loadingSession,
+        isCompacting,
         isImageGenerationMode,
         isVideoGenerationMode,
         fileContext,
@@ -1458,6 +1644,17 @@ export default function Chat ({ sessionId, initialStack }) {
                 <div ref={scrollContainerRef} className='overflow-y-auto bottom-8'>
                     <SpaceBetween direction='vertical' size='l'>
 
+                        {/* Sentinel for infinite scroll upward — triggers loading older messages */}
+                        {hasOlderMessages && !loadingSession && (
+                            <div ref={topSentinelRef} style={{ height: '1px' }}>
+                                {isLoadingOlder && (
+                                    <Box textAlign='center' padding='xs'>
+                                        <Spinner size='normal' /> Loading older messages...
+                                    </Box>
+                                )}
+                            </div>
+                        )}
+
                         {loadingSession && (
                             <Box textAlign='center' padding='l'>
                                 <SpaceBetween size='s' direction='vertical'>
@@ -1492,6 +1689,16 @@ export default function Chat ({ sessionId, initialStack }) {
                             />));
                             // eslint-disable-next-line react-hooks/exhaustive-deps
                         }, [session.history, chatConfiguration, loadingSession])}
+
+                        {!loadingSession && isCompacting && (
+                            <Box textAlign='center' padding='l'>
+                                <SpaceBetween size='s' direction='vertical'>
+                                    <Spinner size='large' />
+                                    <Box color='text-status-info'>Compacting conversation history...</Box>
+                                    <Box variant='small' color='text-status-inactive'>Summarizing older messages to optimize context window</Box>
+                                </SpaceBetween>
+                            </Box>
+                        )}
 
                         {!loadingSession && (isRunning || callingToolName) && !isStreaming && !isImageGenerationMode && !isVideoGenerationMode && <Message
                             isRunning={isRunning}
@@ -1617,19 +1824,9 @@ export default function Chat ({ sessionId, initialStack }) {
                                             )?.contextWindow;
 
                                             if (!contextWindow || session.history.length === 0) return null;
-                                            // Sum live in-memory tokens for immediate UI updates after
-                                            // each response. Fall back to the DDB value on reload.
-                                            // Coerce to Number() because DDB Decimal values deserialize
-                                            // as strings, which cause string concatenation bugs.
-                                            const liveTokens = session.history.reduce((sum, msg) => {
-                                                const u = (msg as any).usage;
-                                                return sum + (Number(u?.completionTokens) || 0) + (Number(u?.promptTokens) || 0);
-                                            }, 0);
-
-                                            const usedTokens = liveTokens > 0
-                                                ? liveTokens
-                                                : (currentSessionSummary?.totalTokensUsed ?? 0);
-                                            if (!usedTokens) return null;
+                                            // Use the server-side totalTokensUsed from the session summary
+                                            // (avoids being impacted by pagination prepending old messages)
+                                            const usedTokens = Number(currentSessionSummary?.totalTokensUsed) || 0;
 
                                             return (
                                                 `${formatContextAndTokenCount(usedTokens)} - Tokens Used`

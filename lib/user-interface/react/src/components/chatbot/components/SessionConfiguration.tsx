@@ -157,20 +157,6 @@ export const SessionConfiguration = ({
                                 Show Message Metadata
                             </Toggle>
                         ] : []),
-                        ...(systemConfig && systemConfig.configuration.enabledComponents.editChatHistoryBuffer && !isImageModel && !isVideoModel && !modelOnly ? [
-                            <FormField key='chatHistoryBuffer' label='Chat History Buffer Size'>
-                                <Select
-                                    disabled={isRunning}
-                                    filteringType='auto'
-                                    selectedOption={{
-                                        value: chatConfiguration.sessionConfiguration.chatHistoryBufferSize.toString(),
-                                        label: chatConfiguration.sessionConfiguration.chatHistoryBufferSize.toString(),
-                                    }}
-                                    onChange={({ detail }) => updateSessionConfiguration('chatHistoryBufferSize', parseInt(detail.selectedOption.value))}
-                                    options={oneThroughTenOptions}
-                                />
-                            </FormField>
-                        ] : []),
                         ...(selectedModel?.features?.find((feature) => feature.name === ModelFeatures.REASONING) ? [
                             <FormField key='reasoningEffort' label='Reasoning Effort'>
                                 <Select
@@ -196,7 +182,7 @@ export const SessionConfiguration = ({
                     ];
 
                     return (
-                        <Grid gridDefinition={items.map(() => ({ colspan: 6 }))}>
+                        <Grid gridDefinition={items.map(() => ({ colspan: 4 }))}>
                             {items}
                         </Grid>
                     );

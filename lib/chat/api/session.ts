@@ -56,6 +56,7 @@ type SessionApiProps = {
  */
 export class SessionApi extends Construct {
     public readonly sessionTable: dynamodb.Table;
+    public readonly messagesTable: dynamodb.Table;
 
     constructor (scope: Construct, id: string, props: SessionApiProps) {
         super(scope, id);
@@ -73,6 +74,22 @@ export class SessionApi extends Construct {
             sortKey: {
                 name: 'userId',
                 type: dynamodb.AttributeType.STRING,
+            },
+            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption: dynamodb.TableEncryption.AWS_MANAGED,
+            removalPolicy: config.removalPolicy,
+            deletionProtection: config.removalPolicy !== RemovalPolicy.DESTROY,
+        });
+
+        // Create DynamoDB table for individual session messages
+        this.messagesTable = new dynamodb.Table(this, 'SessionMessagesTable', {
+            partitionKey: {
+                name: 'sessionId',
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: 'messageIndex',
+                type: dynamodb.AttributeType.NUMBER,
             },
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
             encryption: dynamodb.TableEncryption.AWS_MANAGED,
@@ -124,6 +141,7 @@ export class SessionApi extends Construct {
 
         const env = {
             SESSIONS_TABLE_NAME: this.sessionTable.tableName,
+            MESSAGES_TABLE_NAME: this.messagesTable.tableName,
             SESSIONS_BY_USER_ID_INDEX_NAME: byUserIdIndex,
             GENERATED_IMAGES_S3_BUCKET_NAME: imagesBucketName,
             MODEL_TABLE_NAME: modelTableName,
@@ -201,6 +219,40 @@ export class SessionApi extends Construct {
             })
         );
 
+        // Add full read/write permissions on the messages table for all session Lambdas
+        lambdaRole.addToPrincipalPolicy(
+            new PolicyStatement({
+                effect: Effect.ALLOW,
+                actions: [
+                    'dynamodb:Query',
+                    'dynamodb:PutItem',
+                    'dynamodb:BatchWriteItem',
+                    'dynamodb:DeleteItem',
+                    'dynamodb:GetItem',
+                ],
+                resources: [this.messagesTable.tableArn]
+            })
+        );
+
+        // Used by compact_session
+        lambdaRole.addToPrincipalPolicy(
+            new PolicyStatement({
+                effect: Effect.ALLOW,
+                actions: ['ssm:GetParameter'],
+                resources: [`arn:${config.partition}:ssm:${config.region}:${config.accountNumber}:parameter${config.deploymentPrefix}/*`]
+            })
+        );
+
+        if (config.restApiConfig?.sslCertIamArn) {
+            lambdaRole.addToPrincipalPolicy(
+                new PolicyStatement({
+                    effect: Effect.ALLOW,
+                    actions: ['iam:GetServerCertificate'],
+                    resources: [config.restApiConfig.sslCertIamArn],
+                })
+            );
+        }
+
         // Create API Lambda functions
         const apis: PythonLambdaFunction[] = [
             {
@@ -257,6 +309,35 @@ export class SessionApi extends Construct {
                 path: 'session/{sessionId}/attachImage',
                 method: 'PUT',
                 environment: env,
+            },
+            {
+                name: 'post_messages',
+                resource: 'session',
+                description: 'Appends messages to a session',
+                path: 'session/{sessionId}/messages',
+                method: 'POST',
+                environment: env,
+            },
+            {
+                name: 'get_messages',
+                resource: 'session',
+                description: 'Gets paginated messages for a session',
+                path: 'session/{sessionId}/messages',
+                method: 'GET',
+                environment: env,
+            },
+            {
+                name: 'compact_session',
+                resource: 'session',
+                description: 'Compacts session by summarizing older messages',
+                path: 'session/{sessionId}/compact',
+                method: 'POST',
+                environment: {
+                    ...env,
+                    LISA_API_URL_PS_NAME: `${config.deploymentPrefix}/lisaServeRestApiUri`,
+                    REST_API_VERSION: 'v2',
+                    RESTAPI_SSL_CERT_ARN: config.restApiConfig?.sslCertIamArn ?? '',
+                },
             },
         ];
 

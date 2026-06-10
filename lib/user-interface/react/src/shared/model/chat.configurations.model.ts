@@ -40,7 +40,6 @@ export type ISessionConfiguration = {
     showMetadata: boolean,
     showReasoningContent: boolean,
     max_tokens: number,
-    chatHistoryBufferSize: number,
     ragTopK: number,
     modelArgs: {
         n: number;
@@ -69,7 +68,8 @@ export type ISessionConfiguration = {
 
 export type GenerateLLMRequestParams = {
     input: string,
-    message: LisaChatMessage[]
+    message: LisaChatMessage[],
+    contextMessages?: any[],
 };
 
 export const DEFAULT_PROMPT_TEMPLATE = SYSTEM_PROMPT;
@@ -84,7 +84,6 @@ export const baseConfig: IChatConfiguration = {
         showReasoningContent: true,
         showMetadata: false,
         max_tokens: null,
-        chatHistoryBufferSize: 7,
         ragTopK: 3,
         modelArgs: {
             n: null,

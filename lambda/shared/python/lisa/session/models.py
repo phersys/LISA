@@ -69,7 +69,6 @@ class SessionConfiguration(BaseModel):
     showMetadata: bool = False
     showReasoningContent: bool = True
     max_tokens: int | None = None
-    chatHistoryBufferSize: int = 7
     ragTopK: int = 3
     ragSearchMode: Literal["vector", "hybrid"] | None = None
     vectorWeight: float | None = None
@@ -228,10 +227,14 @@ class Session(BaseModel):
     createTime: str | None = None
     lastUpdated: str | None = None
     projectId: str | None = None
+    nextCursor: str | None = None
+    hasMoreMessages: bool = False
+    compactionMessageIndex: int | None = None
 
     @classmethod
     def from_dynamodb_item(cls, item: dict[str, Any]) -> "Session":
         """Create a Session from a DynamoDB item."""
+        raw_cmi = item.get("compactionMessageIndex")
         return cls(
             sessionId=item.get("sessionId", ""),
             userId=item.get("userId", ""),
@@ -242,6 +245,7 @@ class Session(BaseModel):
             createTime=item.get("createTime"),
             lastUpdated=item.get("lastUpdated"),
             projectId=item.get("projectId"),
+            compactionMessageIndex=int(raw_cmi) if raw_cmi is not None else None,
         )
 
 
@@ -257,6 +261,8 @@ class SessionSummary(BaseModel):
     isEncrypted: bool = False
     projectId: str | None = None
     totalTokensUsed: int | None = None
+    compactionMessageIndex: int | None = None
+    tokensUsedSinceCompaction: int | None = None
 
 
 class PutSessionRequest(BaseModel):
@@ -307,3 +313,65 @@ class AttachImageRequest(BaseModel):
     """Request model for attaching an image to a session."""
 
     message: dict[str, Any] = Field(description="Message object containing image data")
+
+
+class PostMessagesRequest(BaseModel):
+    """Request model for appending messages to a session."""
+
+    messages: list[dict[str, Any]] = Field(description="List of message objects to append")
+    configuration: SessionConfigurationModel | None = Field(
+        default=None,
+        description="Optional updated session configuration",
+    )
+    name: str | None = Field(default=None, description="Optional session name")
+
+    @field_validator("configuration", mode="before")
+    @classmethod
+    def _parse_configuration(cls, v: Any) -> SessionConfigurationModel | None:
+        if v is None:
+            return None
+        if isinstance(v, SessionConfigurationModel):
+            return v
+        if isinstance(v, dict):
+            return SessionConfigurationModel.from_dict(v)
+        return None
+
+
+class MessageItem(BaseModel):
+    """A single message item as stored in the SessionMessages table."""
+
+    sessionId: str
+    messageIndex: int
+    type: str  # "human" | "ai" | "system" | "tool"
+    content: Any = None  # string or list of content blocks
+    metadata: dict[str, Any] | None = None
+    toolCalls: list[Any] | None = None
+    usage: dict[str, Any] | None = None
+    guardrailTriggered: bool | None = None
+    reasoningContent: str | None = None
+    reasoningSignature: str | None = None
+    createdAt: str | None = None
+
+
+class PaginatedMessagesResponse(BaseModel):
+    """Response model for paginated message retrieval."""
+
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    nextCursor: str | None = None
+    hasMore: bool = False
+
+
+class CompactSessionRequest(BaseModel):
+    """Request model for session compaction (summarization of older messages)."""
+
+    modelId: str = Field(description="Model ID to use for summarization")
+    contextWindow: int = Field(description="Context window size of the model")
+
+
+class CompactSessionResponse(BaseModel):
+    """Response model for session compaction."""
+
+    summaryMessageIndex: int = Field(description="Message index where the summary was written")
+    summaryContent: str = Field(description="The generated summary content")
+    compactionMessageIndex: int = Field(description="Index to use as the compaction cursor")
+    systemPrompt: str = Field(description="The system prompt content (message index 0)")
