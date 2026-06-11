@@ -1017,11 +1017,15 @@ export default function Chat ({ sessionId, initialStack }) {
                                 // during the await) so we don't re-persist anything we've already saved.
                                 lastSavedIndexRef.current = session.history.length - 1;
                             } catch {
+                                // Do NOT call setDirtySession(true): this useEffect is keyed on
+                                // `dirtySession`, so flipping it back on would re-fire the same
+                                // failing request immediately and create an infinite request storm.
+                                // The unsaved tail will be picked up on the next user send because
+                                // lastSavedIndexRef was not advanced.
                                 notificationService.generateNotification(
-                                    'Failed to save messages. Will retry on next send.',
+                                    'Failed to save messages. They will be saved on your next send.',
                                     'warning',
                                 );
-                                setDirtySession(true);
                             }
                         }
                     }

@@ -484,6 +484,30 @@ def test_build_message_item_default_type_human():
     assert item["type"] == "human"
 
 
+def test_build_message_item_coerces_floats_to_decimal():
+    """Legacy histories decrypted from encrypted_history come back with Python floats
+    (the JSON decoder uses parse_float=float). DynamoDB rejects floats, so the message
+    builder must coerce them to Decimal at the boundary. Regression for the migration
+    path 500 caused by `Float types are not supported. Use Decimal types instead.`"""
+    from decimal import Decimal
+
+    msg = {
+        "type": "ai",
+        "content": "hi",
+        "metadata": {"temperature": 0.7, "ragSearchMetadata": {"score": 0.42}},
+        "usage": {"promptTokens": 5, "duration_ms": 123.45},
+        "toolCalls": [{"name": "t", "args": {"weight": 0.5}}],
+    }
+    item = build_message_item("s1", 0, msg, encryption_enabled=False, user_id="u1", default_created_at="ts")
+    # Every nested numeric must be Decimal — no floats anywhere in the tree
+    assert isinstance(item["metadata"]["temperature"], Decimal)
+    assert isinstance(item["metadata"]["ragSearchMetadata"]["score"], Decimal)
+    assert isinstance(item["usage"]["duration_ms"], Decimal)
+    assert isinstance(item["toolCalls"][0]["args"]["weight"], Decimal)
+    # Original float values preserved (modulo str-conversion rounding)
+    assert item["metadata"]["temperature"] == Decimal("0.7")
+
+
 # --- put_message_with_index_retry ---
 
 
