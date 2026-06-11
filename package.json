@@ -114,7 +114,7 @@
     "@types/readline-sync": "^1.4.8",
     "@typescript-eslint/eslint-plugin": "^8.59.0",
     "@typescript-eslint/parser": "^8.59.0",
-    "aws-cdk": "^2.1118.4",
+    "aws-cdk": "^2.1126.0",
     "depcheck": "^1.4.7",
     "esbuild": "^0.28.0",
     "eslint": "^10.2.1",
