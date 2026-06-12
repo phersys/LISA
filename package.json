@@ -1,6 +1,6 @@
 {
   "name": "awslabs-lisa",
-  "version": "6.6.0",
+  "version": "6.7.0",
   "description": "A scalable infrastructure-as-code solution for self-hosting and orchestrating LLM inference with RAG capabilities, providing low-latency access to generative AI and embedding models across multiple providers.",
   "keywords": [
     "aws",
@@ -114,7 +114,7 @@
     "@types/readline-sync": "^1.4.8",
     "@typescript-eslint/eslint-plugin": "^8.59.0",
     "@typescript-eslint/parser": "^8.59.0",
-    "aws-cdk": "^2.1118.4",
+    "aws-cdk": "^2.1126.0",
     "depcheck": "^1.4.7",
     "esbuild": "^0.28.0",
     "eslint": "^10.2.1",
@@ -138,7 +138,7 @@
   },
   "dependencies": {
     "@aws-sdk/util-dynamodb": "^3.996.2",
-    "aws-cdk-lib": "^2.250.0",
+    "aws-cdk-lib": "^2.258.1",
     "cdk-ecr-deployment": "^4.2.0",
     "cdk-nag": "^2.38.1",
     "constructs": "^10.6.0",

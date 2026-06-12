@@ -294,11 +294,28 @@ def list_mcp_servers(event: dict, context: dict) -> dict[str, Any]:
     )
 
 
+def _enforce_sharing_permissions(mcp_server_model: McpServerModel, is_admin_user: bool) -> None:
+    """Only administrators may publish MCP servers publicly or share them with groups.
+
+    Shared servers can contain an Authorization header with the {LISA_BEARER_TOKEN}
+    placeholder, which is substituted with each viewing user's bearer token. Allowing
+    non-admins to share servers would let them direct other users' tokens to an
+    arbitrary URL, so sharing is restricted to administrators (matching the UI).
+    """
+    if is_admin_user:
+        return
+    if mcp_server_model.owner == "lisa:public":
+        raise ForbiddenException("Only administrators can share MCP servers with everyone.")
+    if mcp_server_model.groups:
+        raise ForbiddenException("Only administrators can share MCP servers with groups.")
+
+
 @api_wrapper
 def create(event: dict, context: dict) -> Any:
     """Create a new mcp server in DynamoDB."""
-    user_id, _, _ = get_user_context(event)
+    user_id, is_admin_user, _ = get_user_context(event)
     mcp_server_model = McpServerModel.model_validate_json(event["body"])
+    _enforce_sharing_permissions(mcp_server_model, is_admin_user)
     if not mcp_server_model.owner or mcp_server_model.owner != "lisa:public":
         mcp_server_model.owner = user_id
 
@@ -313,6 +330,7 @@ def update(event: dict, context: dict) -> Any:
     user_id, is_admin_user, groups = get_user_context(event)
     mcp_server_id = get_mcp_server_id(event)
     mcp_server_model = McpServerModel.model_validate_json(event["body"])
+    _enforce_sharing_permissions(mcp_server_model, is_admin_user)
     if not mcp_server_model.owner or mcp_server_model.owner != "lisa:public":
         mcp_server_model.owner = user_id
 

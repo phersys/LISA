@@ -1,3 +1,45 @@
+# v6.7.0
+
+## Key Features
+
+### Dedicated Messages Table with Context Compaction
+
+Chat message storage has been refactored into a dedicated DynamoDB Messages table, separating message storage from session metadata. Each message is now an independent record, improving scalability and query flexibility, while the Sessions table serves exclusively as the store for session-level metadata.
+
+Building on this, sessions are now automatically compacted and summarized as users approach 75% of a model's context window, preventing context overflow. Compaction summaries are visible directly in the UI and appended to the system prompt, giving users full transparency into context management.
+
+### Hybrid Search for RAG
+
+LISA now supports hybrid search, combining vector similarity search with keyword-based search to improve retrieval quality across a broader range of query types:
+
+- OpenSearch-backed RAG repositories support hybrid search pipelines.
+- Bedrock Knowledge Base repositories support hybrid search with an admin toggle that acts as a hard gate — disabling it forces vector-only search for all sessions.
+- The search mode selector only appears in the UI when the repository supports hybrid search, and unsupported knowledge bases automatically fall back to vector-only search.
+
+## Other Key Changes
+
+- Refactored and cleaned up the Lambda function implementation for improved code organization and module resolution
+- Updated the default hosted instance type so new deployments use an optimized instance configuration out of the box
+
+## Bug Fixes
+
+- Fixed image generation not correctly referencing attached images, and removing an image reference now properly clears associated references
+- Fixed DynamoDB `Decimal` values being serialized as strings instead of JSON numbers in session API responses
+- Updated the Batch ingestion job container to use the `lisa.rag.pipeline_ingestion` module path and added `PYTHONPATH` so the shared package resolves at runtime
+- Fixed `corsAllowedOrigins` configuration for MCP server deployments and resolved an error introduced during the MCP Workbench upgrade
+- Corrected an indentation issue in the ENV_VAR helper and fixed default AWS session region resolution
+- Fixed LiteLLM config passthrough behavior
+
+## Acknowledgements
+* @bedanley
+* @drduhe
+* @estohlmann
+* @gingerknight
+* @jmharold
+
+**Full Changelog**: https://github.com/awslabs/LISA/compare/v6.6.0..v6.7.0
+
+
 # v6.6.0
 
 ## Key Features

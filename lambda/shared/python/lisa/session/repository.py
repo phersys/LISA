@@ -26,6 +26,7 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 from lisa.domain.domain_objects import DeleteResponse
+from lisa.utilities.encoders import convert_float_to_decimal
 from lisa.utilities.session_encryption import (
     decrypt_session_data,
     decrypt_session_fields,
@@ -257,7 +258,7 @@ def build_message_item(
     encryption_enabled: bool,
     user_id: str,
     default_created_at: str,
-) -> dict[str, Any]:
+) -> Any:
     """Build a message item ready to put into the messages table.
 
     Bundles ``{content, metadata, reasoningContent}`` into the encrypted blob
@@ -294,7 +295,13 @@ def build_message_item(
         item["guardrailTriggered"] = msg["guardrailTriggered"]
     if msg.get("reasoningSignature"):
         item["reasoningSignature"] = msg["reasoningSignature"]
-    return item
+    # Legacy histories decrypted via decrypt_session_data() are JSON-decoded with
+    # parse_float=float, so any nested numeric (model temperature, RAG similarity
+    # score, latency, token counts that came in as JSON numbers) is a Python float.
+    # DynamoDB rejects floats — coerce the whole item to Decimal here so every
+    # caller (post_messages, migration) is safe by default. The encrypted-content
+    # path is a base64 string and is unaffected.
+    return convert_float_to_decimal(item)
 
 
 def put_message_with_index_retry(

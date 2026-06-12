@@ -47,6 +47,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.LEAD_ACCESS_TOKEN }}
       - name: Create Release Branch and Update Version
+        env:
+          # Pass generated description via env var. NEVER interpolate it with
+          # ${{ }} inside `run:` - the model-generated markdown can contain
+          # backticks/$() that the shell would execute.
+          DESCRIPTION: ${{ steps.generate_description.outputs.DESCRIPTION }}
         run: |
           git config --global user.email "evmann@amazon.com"
           git config --global user.name "github_actions_lisa"
@@ -68,7 +73,7 @@ jobs:
           echo "📝 Adding release notes to CHANGELOG.md..."
           # Create a temporary file with the new content
           {
-            echo "${{ steps.generate_description.outputs.DESCRIPTION }}"
+            printf '%s\n' "$DESCRIPTION"
             echo ""  # Add blank line separator
             cat CHANGELOG.md
           } > CHANGELOG_temp.md
@@ -85,17 +90,17 @@ jobs:
           # Switch to release branch to ensure proper context for PR creation
           git checkout release/${{ github.event.inputs.release_tag }}
 
-          # Create the draft pull request
-          gh pr create -d \
+          # Create the draft pull request. Body comes from the env var to avoid
+          # shell/heredoc injection from model-generated content.
+          printf '%s\n' "$DESCRIPTION" | gh pr create -d \
             --title "Release ${{github.event.inputs.release_tag}} into Main" \
             --body-file - \
             --base main \
-            --head release/${{ github.event.inputs.release_tag }} << 'EOF'
-          ${{ steps.generate_description.outputs.DESCRIPTION }}
-          EOF
+            --head release/${{ github.event.inputs.release_tag }}
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ secrets.LEAD_ACCESS_TOKEN }}
+          DESCRIPTION: ${{ steps.generate_description.outputs.DESCRIPTION }}
 
   run_full_e2e:
     name: Run Full E2E on Release Branch
