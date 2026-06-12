@@ -29,6 +29,7 @@ import {
 } from '@cloudscape-design/components';
 import { lisaAxios } from '@/shared/reducers/reducer.utils';
 import { MCP_WORKBENCH_URI } from '@/components/utils';
+import { parseAwsCredentialExport } from './awsCredentials.utils';
 
 type AwsStatusResponse = {
     connected: boolean;
@@ -54,34 +55,38 @@ const AwsCredentialsPanel: React.FC<AwsCredentialsPanelProps> = ({ onStatusChang
     const [accessKeyId, setAccessKeyId] = useState('');
     const [secretAccessKey, setSecretAccessKey] = useState('');
     const [sessionToken, setSessionToken] = useState('');
-    const [region, setRegion] = useState('us-east-1');
+    const [region, setRegion] = useState(window.env?.AWS_REGION || 'us-east-1');
 
     const [status, setStatus] = useState<AwsStatusResponse | null>(null);
     const [accountId, setAccountId] = useState<string | null>(null);
     const [arn, setArn] = useState<string | null>(null);
 
-    const [isLoadingStatus, setIsLoadingStatus] = useState(false);
+    const [isLoadingStatus, setIsLoadingStatus] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isDisconnecting, setIsDisconnecting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [now, setNow] = useState<number>(() => Date.now());
+
+    useEffect(() => {
+        if (!status?.connected || !status.expiresAt) return;
+        const interval = setInterval(() => setNow(Date.now()), 30000);
+        return () => clearInterval(interval);
+    }, [status?.connected, status?.expiresAt]);
 
     const expiresInMinutes = useMemo(() => {
         if (!status?.connected || !status.expiresAt) return null;
         try {
             const expires = new Date(status.expiresAt).getTime();
-            const now = Date.now();
             const diffMs = expires - now;
             if (diffMs <= 0) return 0;
             return Math.round(diffMs / 60000);
         } catch {
             return null;
         }
-    }, [status]);
+    }, [status, now]);
 
     const loadStatus = useCallback(async () => {
         try {
-            setIsLoadingStatus(true);
-            setError(null);
             const { data } = await lisaAxios.get<AwsStatusResponse>(`${MCP_WORKBENCH_URI}/api/aws/status`, {
                 headers: sessionId ? { 'X-Session-Id': sessionId } : undefined,
             });
@@ -94,13 +99,23 @@ const AwsCredentialsPanel: React.FC<AwsCredentialsPanelProps> = ({ onStatusChang
         }
     }, [sessionId, onStatusChange]);
 
-    useEffect(() => {
+    const [prevSessionId, setPrevSessionId] = useState(sessionId);
+    if (sessionId !== prevSessionId) {
+        setPrevSessionId(sessionId);
         setStatus(null);
         setAccountId(null);
         setArn(null);
         setError(null);
+        setIsLoadingStatus(true);
+    }
+
+    useEffect(() => {
+        // Data fetching on mount/prop-change: setState happens inside loadStatus only after
+        // `await` (in promise continuations), which is the canonical effect pattern. The lint
+        // is over-conservative here as it cannot distinguish post-await setState from sync.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         void loadStatus();
-    }, [sessionId, loadStatus]);
+    }, [loadStatus]);
 
     const handleConnect = async () => {
         setError(null);
@@ -148,6 +163,21 @@ const AwsCredentialsPanel: React.FC<AwsCredentialsPanelProps> = ({ onStatusChang
 
     const isConnected = status?.connected;
     const isExpired = isConnected && expiresInMinutes !== null && expiresInMinutes <= 0;
+
+    const handleCredentialPaste = useCallback((event: React.ClipboardEvent) => {
+        const parsed = parseAwsCredentialExport(event.clipboardData.getData('text'));
+        if (!parsed) return;
+
+        setAccessKeyId(parsed.accessKeyId);
+        setSecretAccessKey(parsed.secretAccessKey);
+        setSessionToken(parsed.sessionToken ?? '');
+        event.preventDefault();
+    }, []);
+
+    const credentialInputAttributes = useMemo(
+        () => ({ onPaste: handleCredentialPaste }),
+        [handleCredentialPaste],
+    );
 
     return (
         <Form
@@ -223,7 +253,11 @@ const AwsCredentialsPanel: React.FC<AwsCredentialsPanelProps> = ({ onStatusChang
                         )}
                         <Button
                             variant='inline-link'
-                            onClick={() => void loadStatus()}
+                            onClick={() => {
+                                setIsLoadingStatus(true);
+                                setError(null);
+                                void loadStatus();
+                            }}
                             loading={isLoadingStatus}
                         >
                             Refresh status
@@ -234,12 +268,14 @@ const AwsCredentialsPanel: React.FC<AwsCredentialsPanelProps> = ({ onStatusChang
                     <SpaceBetween size='s' direction='vertical'>
                         <FormField
                             label='Access key ID'
+                            description='Paste export-style credential blocks (e.g. export AWS_ACCESS_KEY_ID=...) to fill all fields.'
                         >
                             <Input
                                 value={accessKeyId}
                                 onChange={({ detail }) => setAccessKeyId(detail.value)}
                                 type='text'
                                 autoComplete='off'
+                                nativeInputAttributes={credentialInputAttributes}
                             />
                         </FormField>
                         <FormField
@@ -250,6 +286,7 @@ const AwsCredentialsPanel: React.FC<AwsCredentialsPanelProps> = ({ onStatusChang
                                 onChange={({ detail }) => setSecretAccessKey(detail.value)}
                                 type='password'
                                 autoComplete='off'
+                                nativeInputAttributes={credentialInputAttributes}
                             />
                         </FormField>
                         <FormField
@@ -260,6 +297,7 @@ const AwsCredentialsPanel: React.FC<AwsCredentialsPanelProps> = ({ onStatusChang
                                 onChange={({ detail }) => setSessionToken(detail.value)}
                                 type='password'
                                 autoComplete='off'
+                                nativeInputAttributes={credentialInputAttributes}
                             />
                         </FormField>
                         <FormField

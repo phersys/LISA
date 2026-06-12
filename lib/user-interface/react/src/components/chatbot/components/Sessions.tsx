@@ -28,20 +28,24 @@ import {
     useListSessionsQuery,
     useUpdateSessionNameMutation,
     useAssignSessionProjectMutation,
+    usePostMessagesMutation,
 } from '@/shared/reducers/session.reducer';
 import { useListStacksQuery } from '@/shared/reducers/chat-assistant-stacks.reducer';
 import { useProjects } from '../hooks/useProjects.hooks';
 import { IChatAssistantStack } from '@/shared/model/chat-assistant-stack.model';
 import { useAppDispatch } from '@/config/store';
 import { useNotificationService } from '@/shared/util/hooks';
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from '../../../auth/useAuth';
 import { IConfiguration } from '@/shared/model/configuration.model';
 import { useNavigate } from 'react-router-dom';
 import { getDisplayableMessage, getSessionDisplay, messageContainsImage, messageContainsVideo } from '@/components/utils';
 import { LisaChatSession } from '@/components/types';
-import JSZip from 'jszip';
+// jszip (~100 KB) is dynamically imported inside the export handler so
+// it only ships to users who actually use media export from Sessions.
 import { downloadFile } from '@/shared/util/downloader';
+import { batchMessages, parseSessionImport } from '../utils/sessionImport.utils';
 import { setConfirmationModal } from '@/shared/reducers/modal.reducer';
 import { formatDate } from '@/shared/util/formats';
 import styles from './Sessions.module.css';
@@ -58,20 +62,15 @@ export function Sessions ({ newSession }) {
     const currentSessionId = window.location.href.includes('ai-assistant/') ? window.location.href.split('ai-assistant/')[1] : undefined;
 
 
-    const [deleteById, {
-        isSuccess: isDeleteByIdSuccess,
-        isError: isDeleteByIdError,
-        error: deleteByIdError,
-        isLoading: isDeleteByIdLoading,
-    }] = useDeleteSessionByIdMutation();
+    const [deleteById] = useDeleteSessionByIdMutation();
     const [updateSessionName, {
-        isSuccess: isUpdateSessionNameSuccess,
-        isError: isUpdateSessionNameError,
-        error: updateSessionNameError,
         isLoading: isUpdateSessionNameLoading,
     }] = useUpdateSessionNameMutation();
     const [assignSessionProject] = useAssignSessionProjectMutation();
+    const [postMessages] = usePostMessagesMutation();
     const [getConfiguration] = useLazyGetConfigurationQuery();
+    const importFileInputRef = useRef<HTMLInputElement>(null);
+    const [isImporting, setIsImporting] = useState<boolean>(false);
     const [config, setConfig] = useState<IConfiguration>();
     const [searchQuery, setSearchQuery] = useState<string>('');
     const [historyView, setHistoryView] = useState<string>(() => {
@@ -91,9 +90,8 @@ export function Sessions ({ newSession }) {
     const [renameModalVisible, setRenameModalVisible] = useState<boolean>(false);
     const [sessionToRename, setSessionToRename] = useState<LisaChatSession | null>(null);
     const [newSessionName, setNewSessionName] = useState<string>('');
-    const [sessionBeingDeleted, setSessionBeingDeleted] = useState<string | null>(null);
     const [assistantCarouselIndex, setAssistantCarouselIndex] = useState(0);
-    const { data: sessions, isLoading: isSessionsLoading } = useListSessionsQuery(undefined, { refetchOnMountOrArgChange: 5 });
+    const { data: sessions, isLoading: isSessionsLoading } = useListSessionsQuery();
     const { data: availableStacks = [] } = useListStacksQuery(undefined, {
         skip: !config?.configuration?.enabledComponents?.chatAssistantStacks,
         refetchOnMountOrArgChange: true,
@@ -160,38 +158,22 @@ export function Sessions ({ newSession }) {
         }
     }, [auth.isLoading, auth.isAuthenticated, getConfiguration]);
 
-    useEffect(() => {
-        if (!isDeleteByIdLoading && isDeleteByIdSuccess) {
+    // Delete a session and react to the result at the call site via
+    // .unwrap(). Replaces a useEffect mirror on isSuccess/isError flags,
+    // which violated react-hooks/set-state-in-effect.
+    const performDeleteSession = useCallback(async (sessionId: string) => {
+        try {
+            await deleteById(sessionId).unwrap();
             notificationService.generateNotification('Successfully deleted session', 'success');
             // Only reload if we are deleting the current session or there is no current session (/ai-assistant with no session ID)
-            if (sessionBeingDeleted === currentSessionId || !currentSessionId) {
+            if (sessionId === currentSessionId || !currentSessionId) {
                 newSession();
             }
-
-            // Reset the tracking state
-            setSessionBeingDeleted(null);
-        } else if (!isDeleteByIdLoading && isDeleteByIdError) {
-            const errorMessage = 'message' in deleteByIdError ? deleteByIdError.message : 'Unknown error';
+        } catch (error: any) {
+            const errorMessage = error && 'message' in error ? error.message : 'Unknown error';
             notificationService.generateNotification(`Error deleting session: ${errorMessage}`, 'error');
-
-            // Reset the tracking state on error too
-            setSessionBeingDeleted(null);
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isDeleteByIdSuccess, isDeleteByIdError, deleteByIdError, isDeleteByIdLoading]);
-
-    useEffect(() => {
-        if (!isUpdateSessionNameLoading && isUpdateSessionNameSuccess) {
-            notificationService.generateNotification('Successfully renamed session', 'success');
-            setRenameModalVisible(false);
-            setSessionToRename(null);
-            setNewSessionName('');
-        } else if (!isUpdateSessionNameLoading && isUpdateSessionNameError) {
-            const errorMessage = 'message' in updateSessionNameError ? updateSessionNameError.message : 'Unknown error';
-            notificationService.generateNotification(`Error renaming session: ${errorMessage}`, 'error');
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isUpdateSessionNameSuccess, isUpdateSessionNameError, updateSessionNameError, isUpdateSessionNameLoading]);
+    }, [deleteById, notificationService, currentSessionId, newSession]);
 
     const handleRenameSession = (session: LisaChatSession) => {
         setSessionToRename(session);
@@ -199,13 +181,22 @@ export function Sessions ({ newSession }) {
         setRenameModalVisible(true);
     };
 
-    const handleRenameConfirm = () => {
+    const handleRenameConfirm = async () => {
         if (sessionToRename && newSessionName.trim()) {
             const updatedSession = {
                 ...sessionToRename,
                 name: newSessionName.trim()
             };
-            updateSessionName(updatedSession);
+            try {
+                await updateSessionName(updatedSession).unwrap();
+                notificationService.generateNotification('Successfully renamed session', 'success');
+                setRenameModalVisible(false);
+                setSessionToRename(null);
+                setNewSessionName('');
+            } catch (error: any) {
+                const errorMessage = error && 'message' in error ? error.message : 'Unknown error';
+                notificationService.generateNotification(`Error renaming session: ${errorMessage}`, 'error');
+            }
         }
     };
 
@@ -219,15 +210,49 @@ export function Sessions ({ newSession }) {
         navigate('/ai-assistant', { state: { stack }, replace: true });
     };
 
+    const handleImportSessionFile = useCallback(async (file: File) => {
+        setIsImporting(true);
+        try {
+            const parsed = parseSessionImport(await file.text());
+            // Always import under a fresh ID; the ID in the file may collide
+            // with an existing session or belong to another user.
+            const newSessionId = uuidv4();
+            for (const batch of batchMessages(parsed.messages)) {
+                await postMessages({
+                    sessionId: newSessionId,
+                    messages: batch,
+                    configuration: parsed.configuration,
+                    name: parsed.name,
+                }).unwrap();
+            }
+            notificationService.generateNotification('Successfully imported session', 'success');
+            navigate(`/ai-assistant/${newSessionId}`);
+        } catch (error: any) {
+            // Optional chaining keeps this safe for thrown primitives, which
+            // would make the `'message' in error` pattern throw.
+            const errorMessage = typeof error === 'string' ? error : error?.message ?? 'Unknown error';
+            notificationService.generateNotification(`Error importing session: ${errorMessage}`, 'error');
+        } finally {
+            setIsImporting(false);
+        }
+    }, [postMessages, notificationService, navigate]);
+
     const safeIndex = Math.min(assistantCarouselIndex, Math.max(0, availableStacks.length - 1));
     const currentAssistant = availableStacks[safeIndex];
     const canGoPrev = availableStacks.length > 1 && safeIndex > 0;
     const canGoNext = availableStacks.length > 1 && safeIndex < availableStacks.length - 1;
     const goPrev = useCallback(() => setAssistantCarouselIndex((i) => Math.max(0, i - 1)), []);
     const goNext = useCallback(() => setAssistantCarouselIndex((i) => Math.min(availableStacks.length - 1, i + 1)), [availableStacks.length]);
-    useEffect(() => {
-        setAssistantCarouselIndex((i) => Math.min(i, Math.max(0, availableStacks.length - 1)));
-    }, [availableStacks.length]);
+    // Clamp the carousel index back into range when stacks shrink. The
+    // visible-position fallback above (safeIndex) already keeps the UI
+    // correct; this just persists the clamp so subsequent goNext/goPrev
+    // don't behave as if they're past the end.
+    const stacksLength = availableStacks.length;
+    const [lastStacksLength, setLastStacksLength] = useState(stacksLength);
+    if (stacksLength !== lastStacksLength) {
+        setLastStacksLength(stacksLength);
+        setAssistantCarouselIndex((i) => Math.min(i, Math.max(0, stacksLength - 1)));
+    }
 
     return (
         <div className='p-5'>
@@ -315,17 +340,36 @@ export function Sessions ({ newSession }) {
                     </Box>
                 )}
                 <div data-testid='sessions-actions' style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <input
+                        ref={importFileInputRef}
+                        type='file'
+                        accept='.json,application/json'
+                        style={{ display: 'none' }}
+                        data-testid='import-session-input'
+                        onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            // Reset so re-selecting the same file fires onChange again
+                            e.target.value = '';
+                            if (file) {
+                                handleImportSessionFile(file);
+                            }
+                        }}
+                    />
                     <ButtonDropdown
                         data-testid='new-session-dropdown'
                         ariaLabel='New session'
                         variant='primary'
+                        loading={isImporting}
                         items={[
                             { id: 'new-chat', text: 'New Chat', iconName: 'add-plus' },
+                            { id: 'import-session', text: 'Import Session', iconName: 'upload' },
                             ...(projectsEnabled && effectiveHistoryView === 'projects' ? [{ id: 'new-project', text: 'New Project', iconName: 'folder' as const }] : []),
                         ]}
                         onItemClick={(e) => {
                             if (e.detail.id === 'new-chat') {
                                 newSession();
+                            } else if (e.detail.id === 'import-session') {
+                                importFileInputRef.current?.click();
                             } else if (e.detail.id === 'new-project') {
                                 window.dispatchEvent(new CustomEvent('lisa:create-project'));
                             }
@@ -448,8 +492,7 @@ export function Sessions ({ newSession }) {
                                                                                     action: 'Delete',
                                                                                     resourceName: 'Session',
                                                                                     onConfirm: () => {
-                                                                                        setSessionBeingDeleted(item.sessionId);
-                                                                                        deleteById(item.sessionId);
+                                                                                        performDeleteSession(item.sessionId);
                                                                                     },
                                                                                     description: `This will delete the Session: ${item.name || getDisplayableMessage(item.firstHumanMessage)}.`
                                                                                 })
@@ -480,6 +523,7 @@ export function Sessions ({ newSession }) {
                                                                                 if (media.length === 0) {
                                                                                     notificationService.generateNotification('No media found to export', 'info');
                                                                                 } else {
+                                                                                    const { default: JSZip } = await import('jszip');
                                                                                     const zip = new JSZip();
                                                                                     let imageCount = 0;
                                                                                     let videoCount = 0;

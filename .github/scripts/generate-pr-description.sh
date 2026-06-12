@@ -199,7 +199,7 @@ Requirements:
 Generate a comprehensive description that covers ALL the provided commits and PRs now:"
 
 # Call Bedrock to generate description
-echo "🤖 Generating PR description with Bedrock Claude 3 Haiku..."
+echo "🤖 Generating PR description with Bedrock Claude Sonnet 4.6..."
 
 # Use jq to properly construct the JSON payload to avoid escaping issues
 BEDROCK_PAYLOAD=$(jq -n \
@@ -216,7 +216,7 @@ BEDROCK_PAYLOAD=$(jq -n \
   }')
 
 RESPONSE=$(aws bedrock-runtime invoke-model \
-    --model-id "anthropic.claude-3-haiku-20240307-v1:0" \
+    --model-id "us.anthropic.claude-sonnet-4-6" \
     --body "$BEDROCK_PAYLOAD" \
     --cli-binary-format raw-in-base64-out \
     /tmp/bedrock_response.json)
@@ -252,6 +252,13 @@ echo "📋 Generated PR description:"
 echo "----------------------------------------"
 echo "$DESCRIPTION"
 echo "----------------------------------------"
+
+# Safety net: refuse to publish anything resembling an env/credential dump.
+# (Consumers must also never interpolate this output into shell via ${{ }}.)
+if printf '%s' "$DESCRIPTION" | grep -qE 'declare -x |AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|ACTIONS_ID_TOKEN_REQUEST|-----BEGIN [A-Z ]*PRIVATE KEY-----'; then
+    echo "❌ Generated description contains credential-like content; refusing to publish"
+    exit 1
+fi
 
 # Save description to GitHub Actions output
 {

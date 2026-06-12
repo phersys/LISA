@@ -1,6 +1,6 @@
 {
   "name": "awslabs-lisa",
-  "version": "6.6.0",
+  "version": "6.7.0",
   "description": "A scalable infrastructure-as-code solution for self-hosting and orchestrating LLM inference with RAG capabilities, providing low-latency access to generative AI and embedding models across multiple providers.",
   "keywords": [
     "aws",
@@ -70,6 +70,7 @@
     "test": "jest && npm run test --workspaces",
     "test:coverage": "jest --coverage && npm run test:coverage --workspaces --if-present && npm run test:python:coverage",
     "test:python:coverage": "bash scripts/run-pytest.sh test/lambda test/mcp-workbench test/sdk test/rest-api --verbose --cov=lambda --cov=lib/serve/mcp-workbench/src --cov=lisa-sdk/lisapy --cov=lib/serve/rest-api/src --cov-report=term-missing --cov-fail-under=80 --cov-config=lib/serve/rest-api/.coveragerc",
+    "test:unit": "jest && bash scripts/run-pytest.sh test/lambda test/sdk test/rest-api test/mcp-workbench --verbose && npm run test --prefix lib/user-interface/react",
     "test:lambda": "bash scripts/run-pytest.sh test/lambda --verbose",
     "test:mcp-workbench": "bash scripts/run-pytest.sh test/mcp-workbench --verbose",
     "test:sdk": "bash scripts/run-pytest.sh test/sdk --verbose",
@@ -113,7 +114,7 @@
     "@types/readline-sync": "^1.4.8",
     "@typescript-eslint/eslint-plugin": "^8.59.0",
     "@typescript-eslint/parser": "^8.59.0",
-    "aws-cdk": "^2.1118.4",
+    "aws-cdk": "^2.1126.0",
     "depcheck": "^1.4.7",
     "esbuild": "^0.28.0",
     "eslint": "^10.2.1",
@@ -137,7 +138,7 @@
   },
   "dependencies": {
     "@aws-sdk/util-dynamodb": "^3.996.2",
-    "aws-cdk-lib": "^2.250.0",
+    "aws-cdk-lib": "^2.258.1",
     "cdk-ecr-deployment": "^4.2.0",
     "cdk-nag": "^2.38.1",
     "constructs": "^10.6.0",

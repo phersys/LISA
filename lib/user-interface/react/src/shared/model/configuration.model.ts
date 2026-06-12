@@ -28,7 +28,6 @@ export type IEnabledComponents = {
     editKwargs: boolean;
     editPromptTemplate: boolean;
     editNumOfRagDocument: boolean;
-    editChatHistoryBuffer: boolean;
     uploadRagDocs: boolean;
     ragSelectionAvailable: boolean;
     uploadContextDocs: boolean;
@@ -45,6 +44,7 @@ export type IEnabledComponents = {
     enableUserApiTokens: boolean;
     chatAssistantStacks: boolean;
     projectOrganization: boolean;
+    hybridSearch?: boolean;
 };
 
 export type ISystemBannerConfiguration = {
@@ -90,7 +90,6 @@ export const enabledComponentsSchema = z.object({
     viewMetaData: z.boolean().default(true),
     editKwargs: z.boolean().default(true),
     editPromptTemplate: z.boolean().default(true),
-    editChatHistoryBuffer: z.boolean().default(true),
     editNumOfRagDocument: z.boolean().default(true),
     uploadRagDocs: z.boolean().default(true),
     ragSelectionAvailable: z.boolean().default(true),
@@ -107,6 +106,7 @@ export const enabledComponentsSchema = z.object({
     enableUserApiTokens: z.boolean().default(false),
     chatAssistantStacks: z.boolean().default(false),
     projectOrganization: z.boolean().default(false),
+    hybridSearch: z.boolean().default(false),
 });
 
 export const globalConfigSchema = z.object({

@@ -25,9 +25,9 @@ import {
 import { RESTAPI_URI, RESTAPI_VERSION, markLastUserMessageAsGuardrailTriggered } from '@/components/utils';
 import { IModel } from '@/shared/model/model-management.model';
 import { GenerateLLMRequestParams, IChatConfiguration } from '@/shared/model/chat.configurations.model';
-import { ChatMemory } from '@/shared/util/chat-memory';
 import { useAppDispatch } from '@/config/store';
 import { sessionApi } from '@/shared/reducers/session.reducer';
+import { extractImageBlobFromFileContext, FileContextFile } from '../utils/fileContext.utils';
 
 /**
  * Parses <thinking>...</thinking> blocks from content and extracts them.
@@ -116,6 +116,61 @@ const finalizeToolCalls = (toolCallsAccumulator: { [index: number]: any }): any[
     }).filter((toolCall) => toolCall.name);
 };
 
+/**
+ * Bedrock (via LiteLLM) rejects requests when an assistant `tool_calls` block is not
+ * immediately followed by `tool` messages with matching `tool_call_id` for every call.
+ * Sliding-window history can cut between those messages; drop orphans so the payload is valid.
+ */
+const sanitizeOpenAiMessagesForToolPairing = (openAiMessages: any[]): any[] => {
+    const out: any[] = [];
+    let i = 0;
+    while (i < openAiMessages.length) {
+        const msg = openAiMessages[i];
+        if (msg.role === 'tool') {
+            i++;
+            continue;
+        }
+        if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+            const pending = new Set(
+                msg.tool_calls.map((tc: any) => tc?.id).filter((id: unknown) => typeof id === 'string' && id.length > 0)
+            );
+            if (pending.size === 0) {
+                const stripped = { ...msg };
+                delete stripped.tool_calls;
+                out.push(stripped);
+                i++;
+                continue;
+            }
+            const toolMsgs: any[] = [];
+            let j = i + 1;
+            while (j < openAiMessages.length && openAiMessages[j].role === 'tool' && pending.size > 0) {
+                const tid = openAiMessages[j].tool_call_id;
+                if (typeof tid === 'string' && pending.has(tid)) {
+                    pending.delete(tid);
+                    toolMsgs.push(openAiMessages[j]);
+                    j++;
+                } else {
+                    break;
+                }
+            }
+            if (pending.size === 0) {
+                out.push(msg, ...toolMsgs);
+                i = j;
+            } else {
+                let k = i + 1;
+                while (k < openAiMessages.length && openAiMessages[k].role === 'tool') {
+                    k++;
+                }
+                i = k;
+            }
+        } else {
+            out.push(msg);
+            i++;
+        }
+    }
+    return out;
+};
+
 // Custom hook for chat generation
 export const useChatGeneration = ({
     chatConfiguration,
@@ -125,11 +180,11 @@ export const useChatGeneration = ({
     session,
     setSession,
     metadata,
-    memory,
     openAiTools,
     auth,
     notificationService,
-    fileContext
+    fileContext,
+    fileContextFiles,
 }: {
     chatConfiguration: IChatConfiguration;
     selectedModel: IModel;
@@ -138,11 +193,11 @@ export const useChatGeneration = ({
     session: LisaChatSession;
     setSession: React.Dispatch<React.SetStateAction<LisaChatSession>>;
     metadata: LisaChatMessageMetadata;
-    memory: ChatMemory;
     openAiTools: any;
     auth: any;
     notificationService: any;
     fileContext?: string;
+    fileContextFiles?: FileContextFile[];
 }) => {
     const dispatch = useAppDispatch();
     const [isRunning, setIsRunning] = useState(false);
@@ -211,25 +266,9 @@ export const useChatGeneration = ({
                     let imageBlob: Blob | null = null;
 
                     if (fileContext) {
-                        // Check if it's an image context (base64 data URL)
-                        if (fileContext.startsWith('File context: data:image')) {
-                            const imageData = fileContext.replace('File context: ', '');
-                            // Extract mime type and base64 data
-                            const matches = imageData.match(/^data:(image\/[^;]+);base64,(.+)$/);
-                            if (matches) {
-                                const mimeType = matches[1];
-                                const base64Data = matches[2];
-
-                                // Convert base64 to Blob for multipart/form-data upload
-                                // OpenAI requires input_reference as a file, not base64 string
-                                const binaryString = atob(base64Data);
-                                const bytes = new Uint8Array(binaryString.length);
-                                for (let i = 0; i < binaryString.length; i++) {
-                                    bytes[i] = binaryString.charCodeAt(i);
-                                }
-                                imageBlob = new Blob([bytes], { type: mimeType });
-                                hasImageReference = true;
-                            }
+                        imageBlob = extractImageBlobFromFileContext(fileContext, fileContextFiles);
+                        if (imageBlob) {
+                            hasImageReference = true;
                         } else {
                             // Text file context - prepend to prompt
                             videoGenParams.prompt = `${fileContext}\n\n${videoGenParams.prompt}`;
@@ -449,7 +488,6 @@ export const useChatGeneration = ({
                         return prev;
                     });
 
-                    await memory.saveContext({ input: params.input }, { output: videoContent });
                 } catch (error) {
                     notificationService.generateNotification('Video generation failed', 'error', undefined, error.message ? <p>{error.message}</p> : undefined);
                     setSession((prev) => ({
@@ -475,32 +513,10 @@ export const useChatGeneration = ({
                         })],
                     }));
 
-                    // Check if there's a reference photo
-                    let hasImageReference = false;
-                    let imageBlob: Blob | null = null;
-
-                    if (fileContext) {
-                        // Check if it's an image context (base64 data URL)
-                        if (fileContext.startsWith('File context: data:image')) {
-                            const imageData = fileContext.replace('File context: ', '');
-                            // Extract mime type and base64 data
-                            const matches = imageData.match(/^data:(image\/[^;]+);base64,(.+)$/);
-                            if (matches) {
-                                const mimeType = matches[1];
-                                const base64Data = matches[2];
-
-                                // Convert base64 to Blob for multipart/form-data upload
-                                // LiteLLM requires the image as a file object for image edits
-                                const binaryString = atob(base64Data);
-                                const bytes = new Uint8Array(binaryString.length);
-                                for (let i = 0; i < binaryString.length; i++) {
-                                    bytes[i] = binaryString.charCodeAt(i);
-                                }
-                                imageBlob = new Blob([bytes], { type: mimeType });
-                                hasImageReference = true;
-                            }
-                        }
-                    }
+                    const imageBlob = fileContext
+                        ? extractImageBlobFromFileContext(fileContext, fileContextFiles)
+                        : null;
+                    const hasImageReference = imageBlob !== null;
 
                     // Choose endpoint based on whether we have a reference image
                     const imageEndpoint = hasImageReference
@@ -610,7 +626,6 @@ export const useChatGeneration = ({
                         return prev;
                     });
 
-                    await memory.saveContext({ input: params.input }, { output: imageContent });
                 } catch (error) {
                     notificationService.generateNotification('Image generation failed', 'error', undefined, error.message ? <p>{error.message}</p> : undefined);
                     // Remove the loading message on error
@@ -624,11 +639,15 @@ export const useChatGeneration = ({
                 // Existing text generation code
                 const llmClient = createOpenAiClient(chatConfiguration.sessionConfiguration.streaming);
 
-                // Convert chat history to messages format
-                // Filter out guardrail-triggered messages when sending to model
-                const filteredHistory = session.history.filter((msg) => !msg.guardrailTriggered);
-                // Always concatenate filtered session history with new messages
-                const messagesToProcess = filteredHistory.concat(params.message);
+                // Use context from backend (full history or compacted) if available,
+                // otherwise fall back to session.history for backward compatibility
+                const contextSource = params.contextMessages && params.contextMessages.length > 0
+                    ? params.contextMessages
+                    : session.history;
+                const filteredContext = contextSource.filter((msg: any) => !msg.guardrailTriggered);
+
+                // Concatenate context with the new message(s) being sent
+                const messagesToProcess = filteredContext.concat(params.message);
 
                 let messages = messagesToProcess.map((msg) => {
                     const baseMessage: any = {
@@ -669,11 +688,8 @@ export const useChatGeneration = ({
                 });
 
                 const [systemMessage, ...initialRemainingMessages] = messages;
-                let remainingMessages = initialRemainingMessages.slice(-(chatConfiguration.sessionConfiguration.chatHistoryBufferSize * 2) - 1);
-
-                if (remainingMessages[0]?.role === MessageTypes.TOOL) {
-                    remainingMessages = remainingMessages.slice(1);
-                }
+                let remainingMessages = initialRemainingMessages;
+                remainingMessages = sanitizeOpenAiMessagesForToolPairing(remainingMessages);
                 messages = [systemMessage, ...remainingMessages];
 
                 if (chatConfiguration.sessionConfiguration.streaming) {
@@ -919,7 +935,6 @@ export const useChatGeneration = ({
                             return prev;
                         });
 
-                        await memory.saveContext({ input: params.input }, { output: finalCleanedContent });
                         setIsStreaming(false);
                     } catch (exception) {
                         if (isGuardrailError(exception)) {
@@ -966,7 +981,6 @@ export const useChatGeneration = ({
 
                     const responseTime = calculateResponseTime(startTime);
 
-                    await memory.saveContext({ input: params.input }, { output: cleanedContent });
 
                     // Create the AI message with cleaned content (thinking blocks removed)
                     const aiMessage = new LisaChatMessage({

@@ -52,6 +52,22 @@ export type VideoGenerationParams = {
     model?: string;
 };
 
+export type RagDocumentCitation = {
+    documentId: string | null;
+    name: string;
+    source: string;
+    repositoryId?: string;
+    collectionId?: string;
+    similarityScore?: number;
+};
+
+export type RagSearchMetadata = {
+    searchMode: string;
+    actualModeUsed: string;
+    backend: string;
+    hybridSupported: boolean;
+};
+
 /**
  * Stores metadata for messages returned from LISA
  */
@@ -61,7 +77,8 @@ export type LisaChatMessageMetadata = {
     userId?: string;
     messages?: string;
     ragContext?: string;
-    ragDocuments?: string;
+    ragDocuments?: RagDocumentCitation[] | string;
+    ragSearchMetadata?: RagSearchMetadata;
     imageGeneration?: boolean;
     imageGenerationParams?: ImageGenerationParams;
     imageGenerationStatus?: string;
@@ -138,11 +155,13 @@ export type LisaChatSession = {
     startTime: string;
     lastUpdated?: string;  // Optional for backward compatibility
     totalTokensUsed?: number;
+    tokensUsedSinceCompaction?: number;
     history: LisaChatMessage[];
     name?: string;
     firstHumanMessage?: MessageContent;
     configuration?: IChatConfiguration & IModelConfiguration;
     projectId?: string;
+    compactionMessageIndex?: number;
 };
 
 export type LisaAttachImageRequest = {
@@ -269,6 +288,7 @@ export enum MessageTypes {
     SYSTEM = 'system',
     AI = 'ai',
     TOOL = 'tool',
+    SUMMARY = 'summary',
 }
 
 /**

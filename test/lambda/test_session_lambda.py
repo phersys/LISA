@@ -50,7 +50,7 @@ retry_config = Config(retries=dict(max_attempts=3), defaults_mode="standard")
 
 def mock_api_wrapper(_func=None, **kwargs):
     """Mock api_wrapper that accepts any kwargs and uses real response builder."""
-    from utilities.response_builder import generate_exception_response, generate_html_response
+    from lisa.utilities.response_builder import generate_exception_response, generate_html_response
 
     def decorator(func):
         @functools.wraps(func)
@@ -160,18 +160,15 @@ patch.dict(
 ).start()
 
 # Then patch the specific functions
-patch("utilities.auth.get_username", mock_common.get_username).start()
-patch("utilities.auth.get_user_context", mock_common.get_user_context).start()
-patch("utilities.common_functions.get_session_id", mock_common.get_session_id).start()
-patch("utilities.common_functions.retry_config", retry_config).start()
-patch("utilities.common_functions.api_wrapper", mock_api_wrapper).start()
+patch("lisa.utilities.auth.get_username", mock_common.get_username).start()
+patch("lisa.utilities.auth.get_user_context", mock_common.get_user_context).start()
+patch("lisa.utilities.common_functions.get_session_id", mock_common.get_session_id).start()
+patch("lisa.utilities.common_functions.retry_config", retry_config).start()
+patch("lisa.utilities.common_functions.api_wrapper", mock_api_wrapper).start()
 
 # Import Pydantic models for type-safe testing
-from models.domain_objects import DeleteResponse, SuccessResponse
-
-# Now import the lambda functions
-from session.lambda_functions import delete_session, delete_user_sessions, get_session, list_sessions, put_session
-from session.models import (
+from lisa.domain.domain_objects import DeleteResponse, SuccessResponse
+from lisa.session.models import (
     PutSessionRequest,
     RenameSessionRequest,
     SelectedModel,
@@ -179,6 +176,9 @@ from session.models import (
     SessionConfigurationModel,
     SessionSummary,
 )
+
+# Now import the lambda functions
+from session.lambda_functions import delete_session, delete_user_sessions, get_session, list_sessions, put_session
 
 
 @pytest.fixture
@@ -424,13 +424,12 @@ def test_list_sessions_empty(dynamodb_table, lambda_context):
 # Import the configuration functions for testing
 from session.lambda_functions import (
     _delete_user_session,
+    _encryption_cache,
     _find_first_human_message,
     _generate_presigned_image_url,
     _get_all_user_sessions,
-    _get_current_model_config,
     _is_session_encryption_enabled,
     _process_image,
-    _update_session_with_current_model_config,
     attach_image_to_session,
     rename_session,
 )
@@ -449,10 +448,7 @@ def test_is_session_encryption_enabled_true(config_table, lambda_context):
         }
     )
 
-    # Clear cache to ensure fresh result
-    from session.lambda_functions import cache
-
-    cache.clear()
+    _encryption_cache.clear()
 
     result = _is_session_encryption_enabled()
     assert result is True
@@ -471,10 +467,7 @@ def test_is_session_encryption_enabled_false(config_table, lambda_context):
         }
     )
 
-    # Clear cache to ensure fresh result
-    from session.lambda_functions import cache
-
-    cache.clear()
+    _encryption_cache.clear()
 
     result = _is_session_encryption_enabled()
     assert result is False
@@ -484,10 +477,7 @@ def test_is_session_encryption_enabled_default_fallback(config_table, lambda_con
     """Test session encryption defaults to disabled when configuration is missing."""
 
     # Don't add any configuration entry
-    # Clear cache to ensure fresh result
-    from session.lambda_functions import cache
-
-    cache.clear()
+    _encryption_cache.clear()
 
     result = _is_session_encryption_enabled()
     assert result is False  # Should default to disabled
@@ -499,10 +489,7 @@ def test_is_session_encryption_enabled_error_fallback(mock_config_table, lambda_
     # Mock the config table to raise an exception
     mock_config_table.query.side_effect = Exception("Database error")
 
-    # Clear cache to ensure fresh result
-    from session.lambda_functions import cache
-
-    cache.clear()
+    _encryption_cache.clear()
 
     result = _is_session_encryption_enabled()
     assert result is False  # Should default to disabled on error
@@ -518,10 +505,7 @@ def test_is_session_encryption_enabled_client_error(mock_config_table, lambda_co
         error_response={"Error": {"Code": "ResourceNotFoundException"}}, operation_name="Query"
     )
 
-    # Clear cache to ensure fresh result
-    from session.lambda_functions import cache
-
-    cache.clear()
+    _encryption_cache.clear()
 
     result = _is_session_encryption_enabled()
     assert result is False  # Should default to False on ClientError
@@ -534,117 +518,78 @@ def test_is_session_encryption_enabled_general_exception(mock_config_table, lamb
     # Mock config table to raise general exception
     mock_config_table.query.side_effect = Exception("General database error")
 
-    # Clear cache to ensure fresh result
-    from session.lambda_functions import cache
-
-    cache.clear()
+    _encryption_cache.clear()
 
     result = _is_session_encryption_enabled()
     assert result is False  # Should default to False on general exception
 
 
-# Model Configuration Tests
-@pytest.fixture(scope="function")
-def model_table(dynamodb):
-    """Create a mock model DynamoDB table."""
-    table = dynamodb.create_table(
-        TableName="model-table",
-        KeySchema=[{"AttributeName": "model_id", "KeyType": "HASH"}],
-        AttributeDefinitions=[{"AttributeName": "model_id", "AttributeType": "S"}],
-        BillingMode="PAY_PER_REQUEST",
-    )
-    table.wait_until_exists()
-    return table
+# Model-config wrapper tests live in test_model_config.py — they exercise the
+# shared helper directly, which is what production now calls.
 
 
-def test_get_current_model_config_missing_table():
-    """Test _get_current_model_config with missing model_table."""
-    with patch("session.lambda_functions.model_table", None):
-        result = _get_current_model_config("test-model")
-        assert result == {}
+def test_rag_config_preserves_supports_hybrid_search():
+    """supportsHybridSearch must survive save/load round-trip."""
+    from lisa.session.models import RagConfig
 
-
-def test_get_current_model_config_missing_model_id():
-    """Test _get_current_model_config with missing model_id."""
-    with patch("session.lambda_functions.model_table") as mock_table:
-        result = _get_current_model_config("")
-        assert result == {}
-        mock_table.get_item.assert_not_called()
-
-
-@patch("session.lambda_functions.model_table")
-def test_get_current_model_config_client_error(mock_model_table):
-    """Test _get_current_model_config with ClientError."""
-    from botocore.exceptions import ClientError
-
-    mock_model_table.get_item.side_effect = ClientError(
-        error_response={"Error": {"Code": "ResourceNotFoundException"}}, operation_name="GetItem"
-    )
-
-    result = _get_current_model_config("test-model")
-    assert result == {}
-
-
-def test_get_current_model_config_success(model_table):
-    """Test _get_current_model_config with successful retrieval."""
-    # Add a model to the table
-    model_table.put_item(Item={"model_id": "test-model", "model_config": {"features": ["feature1"], "streaming": True}})
-
-    with patch("session.lambda_functions.model_table", model_table):
-        result = _get_current_model_config("test-model")
-        assert result == {"features": ["feature1"], "streaming": True}
-
-
-def test_update_session_with_current_model_config_empty_config():
-    """Test _update_session_with_current_model_config with empty config."""
-    result = _update_session_with_current_model_config(SessionConfigurationModel())
-    assert result.selectedModel is None
-
-
-def test_update_session_with_current_model_config_no_model_id():
-    """Test _update_session_with_current_model_config with no modelId."""
-    session_config = SessionConfigurationModel(selectedModel=SelectedModel(modelName="test-model"))  # No modelId
-
-    result = _update_session_with_current_model_config(session_config)
-    assert result.selectedModel.modelName == "test-model"
-
-
-def test_update_session_with_current_model_config_model_not_found():
-    """Test _update_session_with_current_model_config when model not found."""
-    session_config = SessionConfigurationModel(selectedModel=SelectedModel(modelId="non-existent-model"))
-
-    with patch("session.lambda_functions._get_current_model_config") as mock_get_config:
-        mock_get_config.return_value = {}
-
-        result = _update_session_with_current_model_config(session_config)
-        assert result.selectedModel.modelId == "non-existent-model"
-
-
-def test_update_session_with_current_model_config_success():
-    """Test _update_session_with_current_model_config with successful update."""
-    session_config = SessionConfigurationModel(selectedModel=SelectedModel(modelId="test-model"))
-
-    current_model_config = {
-        "features": [{"name": "new-feature", "overview": ""}],
-        "streaming": False,
-        "modelType": "updated-type",
-        "modelDescription": "Updated description",
-        "allowedGroups": ["group1", "group2"],
+    payload = {
+        "repositoryId": "test-repo",
+        "repositoryType": "bedrock_knowledge_base",
+        "supportsHybridSearch": True,
+        "embeddingModel": {"modelId": "titan-embed"},
     }
+    config = RagConfig.model_validate(payload)
+    assert config.supportsHybridSearch is True
 
-    with patch("session.lambda_functions._get_current_model_config") as mock_get_config:
-        mock_get_config.return_value = current_model_config
+    dumped = config.model_dump(mode="json")
+    restored = RagConfig.model_validate(dumped)
+    assert restored.supportsHybridSearch is True
 
-        result = _update_session_with_current_model_config(session_config)
 
-        # Verify the selectedModel was updated with current config
-        assert result.selectedModel is not None
-        assert len(result.selectedModel.features) == 1
-        assert result.selectedModel.features[0].name == "new-feature"
-        assert result.selectedModel.streaming is False
-        assert result.selectedModel.modelType == "updated-type"
-        assert result.selectedModel.modelDescription == "Updated description"
-        assert result.selectedModel.allowedGroups == ["group1", "group2"]
+def test_session_configuration_preserves_rag_search_mode():
+    """ragSearchMode must survive save/load round-trip."""
+    from lisa.session.models import SessionConfiguration
+
+    payload = {"ragTopK": 5, "ragSearchMode": "hybrid", "streaming": True}
+    config = SessionConfiguration.model_validate(payload)
+    assert config.ragSearchMode == "hybrid"
+
+    dumped = config.model_dump(mode="json")
+    restored = SessionConfiguration.model_validate(dumped)
+    assert restored.ragSearchMode == "hybrid"
+
+
+def test_session_configuration_rejects_invalid_rag_search_mode():
+    """ragSearchMode only accepts 'vector', 'hybrid', or None."""
+    from lisa.session.models import SessionConfiguration
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        SessionConfiguration.model_validate({"ragSearchMode": "foobar"})
+
+    config_vector = SessionConfiguration.model_validate({"ragSearchMode": "vector"})
+    assert config_vector.ragSearchMode == "vector"
+
+    config_none = SessionConfiguration.model_validate({})
+    assert config_none.ragSearchMode is None
+
+
+def test_full_session_config_round_trip_with_hybrid_fields():
+    """Full session config round-trip preserves both hybrid-related fields."""
+    payload = {
+        "sessionConfiguration": {"ragSearchMode": "hybrid", "ragTopK": 3},
+        "ragConfig": {
+            "repositoryId": "test-repo",
+            "repositoryType": "bedrock_knowledge_base",
+            "supportsHybridSearch": True,
+        },
+    }
+    config = SessionConfigurationModel.model_validate(payload)
+    stored = config.model_dump_for_storage()
+    restored = SessionConfigurationModel.from_dict(stored)
+
+    assert restored.sessionConfiguration.ragSearchMode == "hybrid"
+    assert restored.ragConfig.supportsHybridSearch is True
 
 
 # Session Processing Tests
@@ -818,7 +763,7 @@ def test_find_first_human_message_encrypted_without_user_id():
 
 def test_find_first_human_message_encrypted_decryption_error():
     """Test _find_first_human_message with encrypted session decryption error."""
-    from utilities.session_encryption import SessionEncryptionError
+    from lisa.utilities.session_encryption import SessionEncryptionError
 
     session = {"sessionId": "test-session", "is_encrypted": True, "history": [{"type": "human", "content": "Hello"}]}
 
@@ -964,7 +909,7 @@ def test_get_session_encrypted_success(mock_decrypt, dynamodb_table, sample_sess
 @patch("session.lambda_functions.decrypt_session_fields")
 def test_get_session_encrypted_decryption_error(mock_decrypt, dynamodb_table, sample_session, lambda_context):
     """Test get_session with encrypted session and decryption error."""
-    from utilities.session_encryption import SessionEncryptionError
+    from lisa.utilities.session_encryption import SessionEncryptionError
 
     # Create encrypted session
     encrypted_session = sample_session.copy()
@@ -987,7 +932,7 @@ def test_get_session_encrypted_decryption_error(mock_decrypt, dynamodb_table, sa
     assert "Failed to decrypt session data" in body["error"]
 
 
-@patch("session.lambda_functions._update_session_with_current_model_config")
+@patch("session.lambda_functions.update_session_with_current_model_config")
 def test_get_session_model_config_update(mock_update_config, dynamodb_table, sample_session, lambda_context):
     """Test get_session with model configuration update."""
     # Create session with configuration
@@ -1185,7 +1130,7 @@ def test_put_session_encryption_error(
     mock_migrate, mock_encryption_enabled, dynamodb_table, config_table, sample_session, lambda_context
 ):
     """Test put_session with encryption enabled but encryption error."""
-    from utilities.session_encryption import SessionEncryptionError
+    from lisa.utilities.session_encryption import SessionEncryptionError
 
     # Mock encryption enabled
     mock_encryption_enabled.return_value = True
@@ -1281,7 +1226,7 @@ def test_put_session_sqs_metrics_error(
         assert response["statusCode"] == 200  # Should still succeed despite SQS error
 
 
-@patch("session.lambda_functions._update_session_with_current_model_config")
+@patch("session.lambda_functions.update_session_with_current_model_config")
 def test_put_session_model_config_update(
     mock_update_config, dynamodb_table, config_table, sample_session, lambda_context
 ):
@@ -1648,7 +1593,7 @@ def test_delete_user_session_with_video_cleanup(mock_table, mock_s3_resource, mo
     mock_s3_client.delete_object.assert_any_call(Bucket="bucket", Key="videos/v2.mp4")
 
 
-@patch("session.repository.decrypt_session_fields")
+@patch("lisa.session.repository.decrypt_session_fields")
 @patch("session.lambda_functions.s3_client")
 @patch("session.lambda_functions.s3_resource")
 @patch("session.lambda_functions.table")
@@ -1698,7 +1643,7 @@ def test_delete_user_session_encrypted_with_videos(mock_table, mock_s3_resource,
 @patch("session.lambda_functions.table")
 def test_delete_user_session_encrypted_decryption_fails(mock_table, mock_s3_resource, mock_s3_client, mock_decrypt):
     """Test _delete_user_session when decryption fails - should still delete session."""
-    from utilities.session_encryption import SessionEncryptionError
+    from lisa.utilities.session_encryption import SessionEncryptionError
 
     encrypted_session = {
         "sessionId": "test-session",
@@ -1908,10 +1853,8 @@ def test_find_first_human_message_list_content_no_text_key():
 
 
 # ---------------------------------------------------------------------------
-# list_sessions — project feature (projectId resolution via BatchGetItem)
+# list_sessions — project feature (projectId resolution via get_item on projects table)
 # ---------------------------------------------------------------------------
-
-os.environ.setdefault("PROJECTS_TABLE_NAME", "projects-table")
 
 
 @pytest.fixture(scope="function")
@@ -1931,23 +1874,7 @@ def projects_table(dynamodb):
     )
     table.wait_until_exists()
 
-    def fake_batch_get_item(RequestItems=None, **kwargs):
-        items = []
-        for key in (RequestItems or {}).get(table.name, {}).get("Keys", []):
-            resp = table.get_item(Key={"userId": key["userId"]["S"], "projectId": key["projectId"]["S"]})
-            item = resp.get("Item")
-            if item:
-                result = {"projectId": {"S": item["projectId"]}}
-                if "status" in item:
-                    result["status"] = {"S": item["status"]}
-                items.append(result)
-        return {"Responses": {table.name: items}, "UnprocessedKeys": {}}
-
-    mock_ddb_client = MagicMock()
-    mock_ddb_client.batch_get_item.side_effect = fake_batch_get_item
-
-    with patch("session.lambda_functions.projects_table", table), patch("session.lambda_functions.boto3") as mock_boto3:
-        mock_boto3.client.return_value = mock_ddb_client
+    with patch("session.lambda_functions.projects_table", table):
         yield table
 
 
@@ -2017,7 +1944,7 @@ def test_list_sessions_project_id_cleared_for_deleting_project(dynamodb_table, p
 
 
 def test_list_sessions_no_project_id_unaffected(dynamodb_table, projects_table, lambda_context):
-    """Sessions without a projectId are returned with projectId=None and no BatchGetItem is issued."""
+    """Sessions without a projectId are returned with projectId=None; no project-table reads are needed."""
     dynamodb_table.put_item(Item={"sessionId": "s1", "userId": "test-user", "history": []})
 
     event = {"requestContext": {"authorizer": {"claims": {"username": "test-user"}}}}
@@ -2046,8 +1973,8 @@ def test_list_sessions_projects_table_none_skips_validation(dynamodb_table, lamb
     assert body[0]["projectId"] is None
 
 
-def test_list_sessions_batch_get_item_error_falls_back_gracefully(dynamodb_table, projects_table, lambda_context):
-    """A BatchGetItem failure is swallowed; all projectIds resolve to None."""
+def test_list_sessions_get_item_error_falls_back_gracefully(dynamodb_table, projects_table, lambda_context):
+    """If project validation get_item calls fail, projectIds that needed validation become None."""
     dynamodb_table.put_item(
         Item={
             "sessionId": "s1",
@@ -2058,11 +1985,7 @@ def test_list_sessions_batch_get_item_error_falls_back_gracefully(dynamodb_table
     )
 
     event = {"requestContext": {"authorizer": {"claims": {"username": "test-user"}}}}
-    with patch("boto3.client") as mock_boto_client:
-        mock_ddb_client = MagicMock()
-        mock_ddb_client.batch_get_item.side_effect = Exception("DynamoDB unavailable")
-        mock_boto_client.return_value = mock_ddb_client
-
+    with patch.object(projects_table, "get_item", side_effect=Exception("DynamoDB unavailable")):
         response = list_sessions(event, lambda_context)
     assert response["statusCode"] == 200
     body = json.loads(response["body"])

@@ -45,9 +45,16 @@ export const sessionApi = createApi({
     reducerPath: 'sessions',
     baseQuery: lisaBaseQuery(),
     tagTypes: ['sessions', 'session'],
-    refetchOnFocus: true,
-    refetchOnMountOrArgChange: true,
-    keepUnusedDataFor: 60, // Keep cache for 60s to prevent cancellation during rapid navigation
+    // Window focus should not trigger the (potentially expensive) sessions
+    // list refetch; mutations already invalidate the relevant tags.
+    refetchOnFocus: false,
+    // Refetch on remount only if the cached data is older than this threshold
+    // (seconds). Quick navigations between the chat page and other pages
+    // reuse the cache; genuinely stale data still refreshes.
+    refetchOnMountOrArgChange: 30,
+    // Keep the list in cache for 5 minutes after the last subscriber unmounts.
+    // Users typically return to the chat page well within that window.
+    keepUnusedDataFor: 300,
     endpoints: (builder) => ({
         getSessionById: builder.query<LisaChatSession, string>({
             query: (sessionId: string) => ({
@@ -188,6 +195,75 @@ export const sessionApi = createApi({
                 }
             },
         }),
+        postMessages: builder.mutation<any, { sessionId: string; messages: LisaChatMessageFields[]; configuration?: any; name?: string }>({
+            query: ({ sessionId, messages, configuration, name }) => ({
+                url: `/session/${sessionId}/messages`,
+                method: 'POST',
+                data: { messages, configuration, name }
+            }),
+            transformErrorResponse: (baseQueryReturnValue) => ({
+                name: 'Post Messages Error',
+                message: extractErrorMessage(baseQueryReturnValue)
+            }),
+            // Patch the per-session cache in place once the server confirms the write,
+            // instead of invalidating its tag. This avoids the GET /session/{id} that
+            // would otherwise fire after every send. Same pattern as assignSessionProject
+            // above. The sidebar list is invalidated below so it picks up name/lastUpdated.
+            async onQueryStarted ({ sessionId, messages, name }, { dispatch, queryFulfilled }) {
+                try {
+                    await queryFulfilled;
+                    dispatch(
+                        sessionApi.util.updateQueryData('getSessionById', sessionId, (draft) => {
+                            if (!draft) return;
+                            // Append (rather than replace) so any messages that arrived via
+                            // pagination or compaction stay intact.
+                            draft.history = [
+                                ...(draft.history ?? []),
+                                ...(messages as any[]),
+                            ];
+                            if (name !== undefined) {
+                                draft.name = name;
+                            }
+                            draft.lastUpdated = new Date().toISOString();
+                        }),
+                    );
+                } catch {
+                    // Mutation failed — leave the cache untouched. The caller (Chat.tsx)
+                    // surfaces the failure and re-marks the session dirty for retry.
+                }
+            },
+            invalidatesTags: ['sessions'],
+        }),
+        getMessages: builder.query<{ messages: any[]; nextCursor: string | null; hasMore: boolean }, { sessionId: string; limit?: number; order?: string; cursor?: string }>({
+            query: ({ sessionId, limit = 50, order = 'desc', cursor }) => {
+                const params = new URLSearchParams({ limit: String(limit), order });
+                if (cursor) params.set('cursor', cursor);
+                return {
+                    url: `/session/${sessionId}/messages?${params.toString()}`
+                };
+            },
+            providesTags: (result, error, { sessionId }) => [
+                { type: 'session', id: sessionId }
+            ],
+        }),
+        compactSession: builder.mutation<
+            { summaryMessageIndex: number; summaryContent: string; compactionMessageIndex: number; systemPrompt: string },
+            { sessionId: string; modelId: string; contextWindow: number }
+        >({
+            query: ({ sessionId, modelId, contextWindow }) => ({
+                url: `/session/${sessionId}/compact`,
+                method: 'POST',
+                data: { modelId, contextWindow }
+            }),
+            transformErrorResponse: (baseQueryReturnValue) => ({
+                name: 'Compact Session Error',
+                message: extractErrorMessage(baseQueryReturnValue)
+            }),
+            invalidatesTags: (result, error, { sessionId }) => [
+                'sessions',
+                { type: 'session', id: sessionId }
+            ],
+        }),
     }),
 });
 
@@ -201,4 +277,7 @@ export const {
     useGetSessionHealthQuery,
     useAttachImageToSessionMutation,
     useAssignSessionProjectMutation,
+    usePostMessagesMutation,
+    useLazyGetMessagesQuery,
+    useCompactSessionMutation,
 } = sessionApi;

@@ -43,9 +43,12 @@ import { useGetAllModelsQuery } from '@/shared/reducers/model-management.reducer
 import { ModelStatus, ModelType } from '@/shared/model/model-management.model';
 import {
     useAttachImageToSessionMutation,
+    useCompactSessionMutation,
     useGetSessionHealthQuery,
+    useLazyGetMessagesQuery,
     useLazyGetSessionByIdQuery,
     useListSessionsQuery,
+    usePostMessagesMutation,
     useUpdateSessionMutation,
 } from '@/shared/reducers/session.reducer';
 import { useAppDispatch, useAppSelector } from '@/config/store';
@@ -69,6 +72,7 @@ import { useToolChain } from './hooks/useToolChain.hooks';
 import { useDynamicMaxRows } from './hooks/useDynamicMaxRows';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { buildMessageContent, buildMessageMetadata } from './utils/messageBuilder.utils';
+import { sessionHistoryHasPendingAssistantToolCalls } from './utils/sessionPersist.utils';
 import { formatContextAndTokenCount } from '../model-management/ModelManagementUtils';
 import { getButtonItems, useButtonActions } from './config/buttonConfig';
 import PromptPreview from './components/PromptPreview';
@@ -96,6 +100,7 @@ import { selectCurrentUsername } from '@/shared/reducers/user.reducer';
 import { isWorkbenchMcpServer } from '../utils';
 import DocumentSidePanel from './components/DocumentSidePanel';
 import { useDocumentSidePanel } from '@/shared/hooks/useDocumentSidePanel';
+import { deriveRagSearchMode } from '@/shared/util/ragSearchMode';
 
 const EMPTY_STACK_MCP_SERVERS: McpServer[] = [];
 
@@ -104,6 +109,7 @@ export default function Chat ({ sessionId, initialStack }) {
     const navigate = useNavigate();
     const config: IConfiguration = useContext(ConfigurationContext);
     const ragSelectionAvailable = config?.configuration?.enabledComponents?.ragSelectionAvailable ?? true;
+    const hybridSearchEnabled = config?.configuration?.enabledComponents?.hybridSearch ?? false;
     const notificationService = useNotificationService(dispatch);
     const modelSelectRef = useRef<HTMLInputElement>(null);
     const bottomRef = useRef(null);
@@ -113,13 +119,23 @@ export default function Chat ({ sessionId, initialStack }) {
 
     // API hooks
     const [getRelevantDocuments] = useLazyGetRelevantDocumentsQuery();
-    const { data: sessionHealth } = useGetSessionHealthQuery(undefined, { refetchOnMountOrArgChange: true });
+    const { data: sessionHealth } = useGetSessionHealthQuery();
     const [getSessionById] = useLazyGetSessionByIdQuery();
     const [updateSession] = useUpdateSessionMutation();
+    const [postMessages] = usePostMessagesMutation();
     const [attachImageToSession] = useAttachImageToSessionMutation();
-    const { data: allModelsRaw, isFetching: isFetchingModels } = useGetAllModelsQuery(undefined, {
-        refetchOnMountOrArgChange: 5,
-    });
+    const [compactSession] = useCompactSessionMutation();
+
+    // Track how many messages have been persisted to the messages table
+    const lastSavedIndexRef = useRef(-1);
+
+    // Pagination: track cursor for loading older messages
+    const [olderMessagesCursor, setOlderMessagesCursor] = useState<string | null>(null);
+    const [hasOlderMessages, setHasOlderMessages] = useState(false);
+    const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+    const topSentinelRef = useRef<HTMLDivElement>(null);
+    const [getMessages] = useLazyGetMessagesQuery();
+    const { data: allModelsRaw, isFetching: isFetchingModels } = useGetAllModelsQuery();
 
     const allModels = useMemo(() =>
         (allModelsRaw || []).filter((model) =>
@@ -159,6 +175,12 @@ export default function Chat ({ sessionId, initialStack }) {
     });
     const effectiveStack = initialStack ?? (chatAssistantId && resumedStack ? resumedStack : undefined);
 
+    const effectiveRagSearchMode = deriveRagSearchMode(
+        chatConfiguration.sessionConfiguration.ragSearchMode,
+        hybridSearchEnabled,
+        ragConfig?.supportsHybridSearch ?? false,
+    );
+
     // When using an assistant stack, restrict model dropdown to stack's modelIds; empty/null => no options
     const modelsForDropdown = useMemo(() => {
         if (!effectiveStack) return allModelsWithStopped;
@@ -167,12 +189,11 @@ export default function Chat ({ sessionId, initialStack }) {
     }, [allModelsWithStopped, effectiveStack]);
     const { data: userPreferences } = useGetUserPreferencesQuery();
     const { data: mcpServers } = useListMcpServersQuery(undefined, {
-        refetchOnMountOrArgChange: true,
         selectFromResult: (state) => ({
             isFetching: state.isFetching,
             data: (state.data?.Items || []).filter((server) => (server.status === McpServerStatus.Active)),
         })
-    },);
+    });
 
     // State management
     const [userPrompt, setUserPrompt] = useState('');
@@ -180,7 +201,7 @@ export default function Chat ({ sessionId, initialStack }) {
     const [fileContextName, setFileContextName] = useState('');
     const [fileContextFiles, setFileContextFiles] = useState<Array<{name: string, content: string}>>([]);
     const [dirtySession, setDirtySession] = useState(false);
-    const [isConnected, setIsConnected] = useState(false);
+    const [isCompacting, setIsCompacting] = useState(false);
     const [useRag, setUseRag] = useState(false);
     const [preferences, setPreferences] = useState<UserPreferences>(undefined);
     const [modelFilterValue, setModelFilterValue] = useState('');
@@ -231,7 +252,17 @@ export default function Chat ({ sessionId, initialStack }) {
     // Ref to track if we're processing tool calls to prevent infinite loops
     const isProcessingToolCalls = useRef(false);
     const lastProcessedMessageIndex = useRef(-1);
+    /** Tracks loadingSession for detecting fetch completion; avoids auto-running MCP on hydrated history. */
+    const prevLoadingSessionRef = useRef(loadingSession);
     const startToolChainRef = useRef<((session: LisaChatSession) => Promise<void>) | undefined>(undefined);
+
+    useEffect(() => {
+        const finishedLoadingSession = prevLoadingSessionRef.current && !loadingSession;
+        prevLoadingSessionRef.current = loadingSession;
+        if (finishedLoadingSession && session.history.length > 0) {
+            lastProcessedMessageIndex.current = session.history.length - 1;
+        }
+    }, [loadingSession, session.history.length]);
 
     // Memoize enabled servers. When using an assistant stack with mcpServerIds, use those servers
     // directly (turned on for this session) regardless of user preferences; otherwise use preferences.
@@ -252,6 +283,24 @@ export default function Chat ({ sessionId, initialStack }) {
     const consecutiveToolCallCount = useRef(0);
     const TOOL_CALL_LIMIT = 20;
     const pendingToolChainExecution = useRef<(() => Promise<void>) | null>(null);
+
+    // Loop-prevention modal handlers. Declared before the tool-call effect
+    // (later in this file) so the effect's closure captures a stable reference,
+    // satisfying react-hooks/immutability.
+    const handleContinueToolCalls = useCallback(async () => {
+        consecutiveToolCallCount.current = 0;
+
+        if (pendingToolChainExecution.current) {
+            await pendingToolChainExecution.current();
+            pendingToolChainExecution.current = null;
+        }
+    }, []);
+
+    const handleStopToolCalls = useCallback(() => {
+        consecutiveToolCallCount.current = 0;
+        pendingToolChainExecution.current = null;
+        notificationService.generateNotification('Tool call chain stopped by user', 'info');
+    }, [notificationService]);
 
     const needsWorkbenchToolList = Boolean(enabledServers?.some(isWorkbenchMcpServer));
     const workbenchListQuery = useListMcpToolsQuery(undefined, { skip: !needsWorkbenchToolList });
@@ -401,14 +450,33 @@ export default function Chat ({ sessionId, initialStack }) {
         bedrockAgentsCatalog?.agents,
     ]);
 
-    const [updatePreferences, {isSuccess: isUpdatingPreferencesSuccess, isError: isUpdatingPreferencesError, isLoading: isUpdatingPreferences}] = useUpdateUserPreferencesMutation();
+    const [updatePreferences, {isLoading: isUpdatingPreferences}] = useUpdateUserPreferencesMutation();
 
-    // Load markdown preview preference from user preferences
-    useEffect(() => {
-        if (userPreferences?.preferences?.showMarkdownPreview !== undefined) {
-            setShowMarkdownPreview(userPreferences.preferences.showMarkdownPreview);
+    // Update tool/MCP preferences and resolve the auto-approval spinner at
+    // the call site via .unwrap(), replacing two useEffect mirrors on the
+    // mutation's isSuccess/isError flags. Declared first so subsequent
+    // handlers can capture it without violating react-hooks/immutability.
+    const updatePreferencesAndNotify = useCallback(async (next: UserPreferences) => {
+        try {
+            await updatePreferences(next).unwrap();
+            notificationService.generateNotification('Successfully updated tool preferences', 'success');
+        } catch {
+            notificationService.generateNotification('Error updating tool preferences', 'error');
+        } finally {
+            setUpdatingAutoApprovalForTool(null);
         }
-    }, [userPreferences]);
+    }, [updatePreferences, notificationService]);
+
+    // Sync the local markdown-preview toggle from the persisted preference
+    // using React's "adjusting state while rendering" pattern. Only resyncs
+    // when the upstream preference actually changes (e.g. user changes it
+    // elsewhere or it loads after mount).
+    const upstreamShowMarkdownPreview = userPreferences?.preferences?.showMarkdownPreview;
+    const [lastSyncedShowMarkdownPreview, setLastSyncedShowMarkdownPreview] = useState(upstreamShowMarkdownPreview);
+    if (upstreamShowMarkdownPreview !== undefined && upstreamShowMarkdownPreview !== lastSyncedShowMarkdownPreview) {
+        setLastSyncedShowMarkdownPreview(upstreamShowMarkdownPreview);
+        setShowMarkdownPreview(upstreamShowMarkdownPreview);
+    }
 
     // Handle markdown preview toggle
     const handleToggleMarkdownPreview = useCallback((enabled: boolean) => {
@@ -422,38 +490,25 @@ export default function Chat ({ sessionId, initialStack }) {
             }
         };
         setPreferences(updated);
-        updatePreferences(updated);
-    }, [preferences, updatePreferences, setPreferences]);
+        updatePreferencesAndNotify(updated);
+    }, [preferences, updatePreferencesAndNotify, setPreferences]);
 
-    useEffect(() => {
-        if (userPreferences) {
-            setPreferences(userPreferences);
-        } else {
-            setPreferences({ ...DefaultUserPreferences, user: userName });
-        }
-    }, [userPreferences, userName]);
-
-    // Handle preferences update success
-    useEffect(() => {
-        if (isUpdatingPreferencesSuccess) {
-            notificationService.generateNotification('Successfully updated tool preferences', 'success');
-            setUpdatingAutoApprovalForTool(null);
-        }
-    }, [isUpdatingPreferencesSuccess, notificationService]);
-
-    // Handle preferences update error
-    useEffect(() => {
-        if (isUpdatingPreferencesError) {
-            notificationService.generateNotification('Error updating tool preferences', 'error');
-            setUpdatingAutoApprovalForTool(null);
-        }
-    }, [isUpdatingPreferencesError, notificationService]);
+    // Sync the local preferences copy from upstream user preferences using
+    // React's "adjusting state while rendering" pattern. Local state is kept
+    // because handlers optimistically setPreferences(...) before the mutation
+    // round-trip completes; we only resync when the upstream identity changes
+    // (initial load, external refresh, or query invalidation).
+    const [lastSyncedUserPreferences, setLastSyncedUserPreferences] = useState<UserPreferences | undefined>(undefined);
+    if (userPreferences !== lastSyncedUserPreferences) {
+        setLastSyncedUserPreferences(userPreferences);
+        setPreferences(userPreferences ?? { ...DefaultUserPreferences, user: userName });
+    }
 
     // Custom hooks
     const { dynamicMaxRows } = useDynamicMaxRows();
 
-    // Get sessions list lastUpdated timestamp
-    const { data: sessions } = useListSessionsQuery(undefined, { refetchOnMountOrArgChange: 5 });
+    // Get sessions list lastUpdated timestamp.
+    const { data: sessions } = useListSessionsQuery();
     const currentSessionSummary = useMemo(() =>
         sessions?.find((s) => s.sessionId === session.sessionId),
     [sessions, session.sessionId]
@@ -492,12 +547,25 @@ export default function Chat ({ sessionId, initialStack }) {
         }
     }, [selectedModel, hasUserInteractedWithModel, config?.configuration?.global?.defaultModel, availableModelsForDefault, handleModelChange, setSelectedModel]);
 
-    // Apply stack config when starting a new session from a Chat Assistant (after session exists so RAG isn't overwritten by createNewSession)
-    const initialStackApplied = useRef(false);
+    // Apply stack config when starting a new session from a Chat Assistant
+    // (after session exists so RAG isn't overwritten by createNewSession).
+    // This is a one-shot init that responds to several pieces of async-loaded
+    // data converging. The synchronous setStates happen during render-phase
+    // via a guarded block ("adjusting state while rendering" pattern). The
+    // async persona-prompt fetch is split into its own effect with an
+    // explicit await boundary so all setStates run after the await.
+    const [initialStackApplied, setInitialStackApplied] = useState(false);
     const [getPromptTemplate] = useLazyGetPromptTemplateQuery();
-    useEffect(() => {
-        const sessionReady = sessionId != null || internalSessionId != null;
-        if (!initialStack || session.history.length > 0 || initialStackApplied.current || !allModels?.length || !sessionReady) return;
+
+    const sessionReady = sessionId != null || internalSessionId != null;
+    if (
+        !initialStackApplied
+        && initialStack
+        && session.history.length === 0
+        && Boolean(allModels?.length)
+        && sessionReady
+    ) {
+        setInitialStackApplied(true);
         const firstModelId = initialStack.modelIds?.[0];
         const model = firstModelId ? allModels.find((m) => m.modelId === firstModelId) : undefined;
         if (model) {
@@ -508,22 +576,6 @@ export default function Chat ({ sessionId, initialStack }) {
         setChatAssistantId(initialStack.stackId);
         setChatConfiguration((prev) => ({ ...prev, chatAssistantId: initialStack.stackId }));
 
-        // Set system prompt from persona prompt if configured
-        if (initialStack.personaPromptId) {
-            getPromptTemplate(initialStack.personaPromptId).then((result) => {
-                if (result.data?.body) {
-                    setChatConfiguration((prev) => ({
-                        ...prev,
-                        promptConfiguration: {
-                            ...prev.promptConfiguration,
-                            promptTemplate: result.data.body,
-                        },
-                    }));
-                }
-            });
-        }
-
-        // Set initial RAG from stack when present; clear RAG when stack has no repos
         const repoIds = initialStack.repositoryIds ?? [];
         if (repoIds.length) {
             setRagConfig((prev) => ({
@@ -533,9 +585,32 @@ export default function Chat ({ sessionId, initialStack }) {
         } else {
             setRagConfig({} as import('./components/RagOptions').RagConfig);
         }
+    }
 
-        initialStackApplied.current = true;
-    }, [initialStack, session.history.length, sessionId, internalSessionId, allModels, setSession, handleModelChange, setSelectedModel, selectedModel, getPromptTemplate, setChatConfiguration, setRagConfig, setChatAssistantId]);
+    useEffect(() => {
+        if (!initialStackApplied || !initialStack?.personaPromptId) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const result = await getPromptTemplate(initialStack.personaPromptId);
+                if (cancelled) return;
+                if (result.data?.body) {
+                    setChatConfiguration((prev) => ({
+                        ...prev,
+                        promptConfiguration: {
+                            ...prev.promptConfiguration,
+                            promptTemplate: result.data.body,
+                        },
+                    }));
+                }
+            } catch (err) {
+                console.error('Error loading persona prompt template:', err);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [initialStackApplied, initialStack?.personaPromptId, getPromptTemplate, setChatConfiguration]);
 
 
     // Wrapper for handleModelChange that tracks user interaction
@@ -545,12 +620,17 @@ export default function Chat ({ sessionId, initialStack }) {
         handleModelChange(value, selectedModel, setSelectedModel);
     };
 
-    // Update filter value when selected model changes
-    useEffect(() => {
+    // Keep the filter input in sync with externally-set selectedModel
+    // (default model selection, session load, stack apply) using React's
+    // "adjusting state while rendering" pattern. This avoids a redundant
+    // render that a useEffect-driven sync would incur.
+    const [lastSyncedModelId, setLastSyncedModelId] = useState(selectedModel?.modelId);
+    if (selectedModel?.modelId !== lastSyncedModelId) {
+        setLastSyncedModelId(selectedModel?.modelId);
         setModelFilterValue(selectedModel?.modelId ?? '');
-    }, [selectedModel]);
+    }
 
-    const { memory, metadata } = useMemory(
+    const { metadata } = useMemory(
         session,
         chatConfiguration,
         selectedModel,
@@ -690,7 +770,7 @@ export default function Chat ({ sessionId, initialStack }) {
     }, [userPreferences?.preferences?.bedrockAgents?.enabledAgents, bedrockFunctionToolIndex]);
 
     const fetchRelevantDocuments = useCallback(async (query: string) => {
-        const { ragTopK = 3 } = chatConfiguration.sessionConfiguration;
+        const { ragTopK = 3, vectorWeight, lexicalWeight } = chatConfiguration.sessionConfiguration;
 
         return getRelevantDocuments({
             query,
@@ -698,8 +778,11 @@ export default function Chat ({ sessionId, initialStack }) {
             collectionId: ragConfig.collection?.collectionId,
             topK: ragTopK,
             modelName: !ragConfig.collection?.collectionId ? ragConfig.embeddingModel?.modelId : undefined,
+            searchMode: effectiveRagSearchMode,
+            ...(effectiveRagSearchMode === 'hybrid' && vectorWeight != null && { vectorWeight }),
+            ...(effectiveRagSearchMode === 'hybrid' && lexicalWeight != null && { lexicalWeight }),
         });
-    }, [getRelevantDocuments, chatConfiguration.sessionConfiguration, ragConfig.repositoryId, ragConfig.collection, ragConfig.embeddingModel]);
+    }, [getRelevantDocuments, chatConfiguration.sessionConfiguration, ragConfig.repositoryId, ragConfig.collection, ragConfig.embeddingModel, effectiveRagSearchMode]);
 
     const { isRunning, setIsRunning, isStreaming, generateResponse, stopGeneration, retryResponse, errorState } = useChatGeneration({
         chatConfiguration,
@@ -709,13 +792,13 @@ export default function Chat ({ sessionId, initialStack }) {
         session,
         setSession,
         metadata,
-        memory,
         openAiTools: (config?.configuration?.enabledComponents?.mcpConnections
             || config?.configuration?.enabledComponents?.bedrockAgents)
             ? openAiTools
             : undefined,
         auth,
         fileContext,
+        fileContextFiles,
         notificationService
     });
 
@@ -784,7 +867,7 @@ export default function Chat ({ sessionId, initialStack }) {
                 },
             };
             setPreferences(updated);
-            updatePreferences(updated);
+            updatePreferencesAndNotify(updated);
             return;
         }
         setUpdatingAutoApprovalForTool(toolName);
@@ -828,7 +911,7 @@ export default function Chat ({ sessionId, initialStack }) {
             }
         };
         setPreferences(updated);
-        updatePreferences(updated);
+        updatePreferencesAndNotify(updated);
     };
 
     // Handle stop functionality
@@ -842,12 +925,9 @@ export default function Chat ({ sessionId, initialStack }) {
     // Determine if we should show stop button
     const shouldShowStopButton = Boolean(isRunning || callingToolName);
 
-    useEffect(() => {
-        if (sessionHealth) {
-            setIsConnected(true);
-        }
-
-    }, [sessionHealth]);
+    // Connection status is derived directly from the session-health query
+    // result; no useEffect mirror needed.
+    const isConnected = Boolean(sessionHealth);
 
     // Handle tool calls with chaining support
     useEffect(() => {
@@ -855,12 +935,19 @@ export default function Chat ({ sessionId, initialStack }) {
             if (session.history.length && !isProcessingToolCalls.current) {
                 const currentMessageIndex = session.history.length - 1;
 
-                // Update session if there are changes
+                // Update session if there are changes (skip while assistant still has unexecuted tool calls
+                // or output is streaming — otherwise we persist before MCP runs and reload replays a bad tail)
                 if (dirtySession) {
-                    if (session.history.at(-1)?.type === MessageTypes.AI && !auth.isLoading) {
+                    const canPersistAssistantTurn =
+                        session.history.at(-1)?.type === MessageTypes.AI &&
+                        !auth.isLoading &&
+                        !isStreaming &&
+                        !sessionHistoryHasPendingAssistantToolCalls(session.history);
+
+                    if (canPersistAssistantTurn) {
                         setDirtySession(false);
                         const message = session.history.at(-1);
-                        if (session.history.at(-1).metadata.imageGeneration && Array.isArray(session.history.at(-1).content)) {
+                        if (session.history.at(-1).metadata?.imageGeneration && Array.isArray(session.history.at(-1).content)) {
                             // Session was updated and response contained images that need to be attached to the session
                             await Promise.all(
                                 (Array.isArray(message.content) ? message.content : []).map(async (content: { type?: string; image_url?: { url?: string; s3_key?: string } }) => {
@@ -882,19 +969,65 @@ export default function Chat ({ sessionId, initialStack }) {
                                 })
                             );
                         }
-                        const updatedHistory = [...session.history.slice(0, -1), message];
 
+                        // Determine which messages are new (unsaved) since last persist
+                        const newMessages = session.history.slice(lastSavedIndexRef.current + 1);
                         const assistantId = chatAssistantId || effectiveStack?.stackId;
-                        updateSession({
-                            ...session,
-                            history: updatedHistory,
-                            configuration: {
-                                ...chatConfiguration,
-                                selectedModel: selectedModel,
-                                ragConfig: ragConfig,
-                                ...(assistantId ? { chatAssistantId: assistantId } : {}),
-                            },
-                        });
+
+                        if (newMessages.length > 0) {
+                            // Generate a session name only for the new sessions
+                            let sessionName: string | undefined = undefined;
+                            if (!session.name) {
+                                const firstHuman = newMessages.find((m) => m.type === 'human' || m.type === MessageTypes.HUMAN);
+                                if (firstHuman) {
+                                    const text = typeof firstHuman.content === 'string'
+                                        ? firstHuman.content
+                                        : Array.isArray(firstHuman.content)
+                                            ? (firstHuman.content.filter((c) => c?.text).pop()?.text || '')
+                                            : '';
+                                    sessionName = text.slice(0, 50) || 'New Chat';
+                                    setSession((prev) => ({ ...prev, name: sessionName }));
+                                }
+                            }
+
+                            // Use the new postMessages endpoint for incremental writes.
+                            // Await + advance lastSavedIndex only on success
+                            try {
+                                await postMessages({
+                                    sessionId: session.sessionId,
+                                    messages: newMessages.map((msg) => ({
+                                        type: msg.type,
+                                        content: msg.content,
+                                        metadata: msg.metadata,
+                                        toolCalls: msg.toolCalls,
+                                        usage: msg.usage,
+                                        guardrailTriggered: msg.guardrailTriggered,
+                                        reasoningContent: msg.reasoningContent,
+                                        reasoningSignature: msg.reasoningSignature,
+                                    })),
+                                    configuration: {
+                                        ...chatConfiguration,
+                                        selectedModel: selectedModel,
+                                        ragConfig: ragConfig,
+                                        ...(assistantId ? { chatAssistantId: assistantId } : {}),
+                                    },
+                                    name: sessionName,
+                                }).unwrap();
+                                // Advance to the current end of history (which may have grown
+                                // during the await) so we don't re-persist anything we've already saved.
+                                lastSavedIndexRef.current = session.history.length - 1;
+                            } catch {
+                                // Do NOT call setDirtySession(true): this useEffect is keyed on
+                                // `dirtySession`, so flipping it back on would re-fire the same
+                                // failing request immediately and create an infinite request storm.
+                                // The unsaved tail will be picked up on the next user send because
+                                // lastSavedIndexRef was not advanced.
+                                notificationService.generateNotification(
+                                    'Failed to save messages. They will be saved on your next send.',
+                                    'warning',
+                                );
+                            }
+                        }
                     }
                 }
 
@@ -951,18 +1084,28 @@ export default function Chat ({ sessionId, initialStack }) {
 
         handleToolCalls();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isRunning, session.history.length, dirtySession, chatConfiguration, chatAssistantId, effectiveStack?.stackId]);
+    }, [isRunning, isStreaming, session.history.length, dirtySession, chatConfiguration, chatAssistantId, effectiveStack?.stackId]);
 
-    // Connection health check
+    // When session ID changes (navigation to different session), reset lastSavedIndex
     useEffect(() => {
-        if (sessionHealth) {
-            setIsConnected(true);
-        }
-    }, [sessionHealth]);
+        lastSavedIndexRef.current = -1;
+    }, [sessionId]);
 
-    // When session finishes loading, enable auto-scroll and scroll to bottom
+    // When session finishes loading, capture pagination cursor and enable auto-scroll
     useEffect(() => {
         if (!loadingSession && session.history.length > 0 && sessionId) {
+            // Only reset lastSavedIndex if it hasn't been updated yet for this session load
+            if (lastSavedIndexRef.current === -1) {
+                lastSavedIndexRef.current = session.history.length - 1;
+            }
+
+            // Capture pagination info from the session response (v2.0 sessions)
+            const sess = session as any;
+            if (sess.nextCursor !== undefined) {
+                setOlderMessagesCursor(sess.nextCursor);
+                setHasOlderMessages(sess.hasMoreMessages || false);
+            }
+
             // Re-enable auto-scroll when a session is loaded
             setShouldAutoScroll(true);
 
@@ -986,16 +1129,15 @@ export default function Chat ({ sessionId, initialStack }) {
                 timeoutIds.forEach((id) => clearTimeout(id));
             };
         }
-    }, [loadingSession, sessionId, session.history.length]);
+    }, [loadingSession, sessionId]);
 
     useEffect(() => {
         if (shouldAutoScroll && scrollContainerRef.current) {
             // Scroll the container directly to the bottom
-            // This is more reliable than scrollIntoView for ensuring we reach the actual bottom
             const container = scrollContainerRef.current;
             container.scrollTop = container.scrollHeight;
         }
-    }, [isStreaming, session, mermaidRenderComplete, videoLoadComplete, imageLoadComplete, shouldAutoScroll]);
+    }, [isStreaming, session, mermaidRenderComplete, videoLoadComplete, imageLoadComplete, shouldAutoScroll, isCompacting]);
 
     // Scroll event listener to detect scroll position
     useEffect(() => {
@@ -1027,29 +1169,105 @@ export default function Chat ({ sessionId, initialStack }) {
         return () => scrollContainer.removeEventListener('scroll', handleScroll);
     }, [shouldAutoScroll]);
 
+    // IntersectionObserver: load older messages when user scrolls to top
+    useEffect(() => {
+        if (!topSentinelRef.current || !hasOlderMessages || !olderMessagesCursor || !scrollContainerRef.current) return;
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (entry.isIntersecting && !isLoadingOlder && olderMessagesCursor) {
+                    // User scrolled to the top — fetch older messages
+                    setIsLoadingOlder(true);
+                    const scrollContainer = scrollContainerRef.current;
+                    const prevScrollHeight = scrollContainer?.scrollHeight || 0;
+
+                    getMessages({ sessionId: session.sessionId, limit: 50, order: 'desc', cursor: olderMessagesCursor })
+                        .then((result) => {
+                            if (result.data) {
+                                // Update cursor FIRST to prevent re-triggering with same cursor
+                                setOlderMessagesCursor(result.data.nextCursor || null);
+                                setHasOlderMessages(result.data.hasMore === true && !!result.data.nextCursor);
+
+                                if (result.data.messages.length > 0) {
+                                    const olderMessages = [...result.data.messages].reverse(); // Reverse to chronological
+                                    // Prepend older messages to the session history
+                                    setSession((prev) => ({
+                                        ...prev,
+                                        history: [...olderMessages, ...prev.history],
+                                    }));
+                                    // Update lastSavedIndexRef since prepended messages are already saved
+                                    lastSavedIndexRef.current += olderMessages.length;
+
+                                    // Preserve scroll position after prepending
+                                    requestAnimationFrame(() => {
+                                        if (scrollContainer) {
+                                            const newScrollHeight = scrollContainer.scrollHeight;
+                                            scrollContainer.scrollTop = newScrollHeight - prevScrollHeight;
+                                        }
+                                    });
+                                }
+                            }
+                        })
+                        .finally(() => setIsLoadingOlder(false));
+                }
+            },
+            {
+                root: scrollContainerRef.current,
+                threshold: 0.1,
+            }
+        );
+
+        observer.observe(topSentinelRef.current);
+        return () => observer.disconnect();
+    }, [hasOlderMessages, isLoadingOlder, olderMessagesCursor, session.sessionId, getMessages, setSession]);
+
     // Reset tool call counter when session changes
     useEffect(() => {
         consecutiveToolCallCount.current = 0;
     }, [sessionId]);
 
-    // Handle loop prevention modal actions
-    const handleContinueToolCalls = useCallback(async () => {
-        consecutiveToolCallCount.current = 0; // Reset counter
-
-        if (pendingToolChainExecution.current) {
-            await pendingToolChainExecution.current();
-            pendingToolChainExecution.current = null;
-        }
-    }, []);
-
-    const handleStopToolCalls = useCallback(() => {
-        consecutiveToolCallCount.current = 0; // Reset counter
-        pendingToolChainExecution.current = null; // Clear pending execution
-        notificationService.generateNotification('Tool call chain stopped by user', 'info');
-    }, [notificationService]);
-
     const handleSendGenerateRequest = useCallback(async () => {
         if (!userPrompt.trim()) return;
+
+        // Compaction Check
+        const contextWindow = allModelsRaw?.find(
+            (m) => m.modelId === selectedModel?.modelId
+        )?.contextWindow;
+        const usedTokens = Number(currentSessionSummary?.tokensUsedSinceCompaction ?? currentSessionSummary?.totalTokensUsed) || 0;
+
+        if (contextWindow && usedTokens > 0 && selectedModel?.modelId && session.history.length >= 3) {
+            const ratio = usedTokens / contextWindow;
+            if (ratio >= 0.75) {
+                setIsCompacting(true);
+                setShouldAutoScroll(true);
+                try {
+                    const result = await compactSession({
+                        sessionId: session.sessionId,
+                        modelId: selectedModel.modelId,
+                        contextWindow,
+                    }).unwrap();
+
+                    setSession((prev) => ({
+                        ...prev,
+                        compactionMessageIndex: result.compactionMessageIndex,
+                        history: [...prev.history, new LisaChatMessage({
+                            type: MessageTypes.SUMMARY,
+                            content: result.summaryContent,
+                            metadata: { systemPrompt: result.systemPrompt },
+                        })],
+                    }));
+                    lastSavedIndexRef.current = session.history.length;
+                } catch {
+                    notificationService.generateNotification(
+                        'Session compaction failed. Continuing without compaction.',
+                        'warning'
+                    );
+                } finally {
+                    setIsCompacting(false);
+                }
+            }
+        }
+
         setIsRunning(true);
 
         // Reset tool call counter when human provides input
@@ -1102,6 +1320,15 @@ export default function Chat ({ sessionId, initialStack }) {
             ragDocs,
         });
 
+        if (messageMetadata.ragSearchMetadata?.searchMode === 'hybrid' &&
+            messageMetadata.ragSearchMetadata.actualModeUsed !== 'hybrid') {
+            notificationService.generateNotification(
+                'This repository does not support hybrid search. Results were returned using vector search. ' +
+                'You can change the search mode in session settings.',
+                'warning',
+            );
+        }
+
         messages.push(new LisaChatMessage({
             type: 'human',
             content: messageContent,
@@ -1113,12 +1340,34 @@ export default function Chat ({ sessionId, initialStack }) {
             history: prev.history.slice(0, -1).concat(...messages),
         }));
 
+        setUserPrompt('');
+
+        // Build the LLM-ready context array from in-memory session state:
+        //   non-compacted -> entire persisted history
+        //   compacted     -> rebuilt compactedSystemPrompt + messages after the SUMMARY
+        let contextMessages: any[] = session.history;
+        if (typeof (session as any).compactionMessageIndex === 'number') {
+            // Locate the most recent SUMMARY by type — robust to messageIndex/array drift.
+            const lastSummaryIdx = session.history
+                .map((m: any) => m?.type)
+                .lastIndexOf(MessageTypes.SUMMARY);
+            if (lastSummaryIdx >= 0) {
+                const summaryMsg: any = session.history[lastSummaryIdx];
+                const summaryContent = typeof summaryMsg?.content === 'string' ? summaryMsg.content : '';
+                const originalSystemPrompt = summaryMsg?.metadata?.systemPrompt || '';
+                const compactedSystemPrompt = `${originalSystemPrompt}\n\n--- Conversation Summary (prior context) ---\n${summaryContent}`;
+                contextMessages = [
+                    { type: 'system', content: compactedSystemPrompt },
+                    ...session.history.slice(lastSummaryIdx + 1),
+                ];
+            }
+        }
+
         const params: GenerateLLMRequestParams = {
             input: userPrompt,
             message: messages,
+            contextMessages,
         };
-
-        setUserPrompt('');
 
         await generateResponse({
             ...params
@@ -1126,7 +1375,7 @@ export default function Chat ({ sessionId, initialStack }) {
 
         setDirtySession(true);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [userPrompt, useRag, fileContext, chatConfiguration, generateResponse, isImageGenerationMode, isVideoGenerationMode, fetchRelevantDocuments, notificationService]);
+    }, [userPrompt, useRag, fileContext, chatConfiguration, generateResponse, isImageGenerationMode, isVideoGenerationMode, fetchRelevantDocuments, notificationService, compactSession]);
 
     // Ref to track if we're processing a keyboard event
     const isKeyboardEventRef = useRef(false);
@@ -1143,11 +1392,11 @@ export default function Chat ({ sessionId, initialStack }) {
             handleStop();
         } else {
             // Normal send functionality - allow both button clicks and Enter key
-            if (userPrompt.length > 0 && !isRunning && !callingToolName && !loadingSession) {
+            if (userPrompt.length > 0 && !isRunning && !callingToolName && !loadingSession && !isCompacting) {
                 handleSendGenerateRequest();
             }
         }
-    }, [shouldShowStopButton, handleStop, userPrompt.length, isRunning, callingToolName, loadingSession, handleSendGenerateRequest]);
+    }, [shouldShowStopButton, handleStop, userPrompt.length, isRunning, callingToolName, loadingSession, isCompacting, handleSendGenerateRequest]);
 
     // Handle Enter key press
     const handleKeyPress = useCallback((event: any) => {
@@ -1160,7 +1409,7 @@ export default function Chat ({ sessionId, initialStack }) {
                 // Do nothing for stop button when Enter is pressed
             } else {
                 // Normal send functionality for Enter key
-                if (userPrompt.length > 0 && !isRunning && !callingToolName && !loadingSession) {
+                if (userPrompt.length > 0 && !isRunning && !callingToolName && !loadingSession && !isCompacting) {
                     handleSendGenerateRequest();
                 }
             }
@@ -1170,7 +1419,7 @@ export default function Chat ({ sessionId, initialStack }) {
                 isKeyboardEventRef.current = false;
             }, 100);
         }
-    }, [shouldShowStopButton, userPrompt.length, isRunning, callingToolName, loadingSession, handleSendGenerateRequest]);
+    }, [shouldShowStopButton, userPrompt.length, isRunning, callingToolName, loadingSession, isCompacting, handleSendGenerateRequest]);
 
     const getButtonItemsWithAssistantMode = useCallback((...args: Parameters<typeof getButtonItems>) => {
         const [config, useRag, isImageGen, isVideoGen, isConnected, isModelDel, showMd] = args;
@@ -1185,6 +1434,7 @@ export default function Chat ({ sessionId, initialStack }) {
         isConnected,
         selectedModel,
         loadingSession,
+        isCompacting,
         isImageGenerationMode,
         isVideoGenerationMode,
         fileContext,
@@ -1209,6 +1459,7 @@ export default function Chat ({ sessionId, initialStack }) {
         isConnected,
         selectedModel,
         loadingSession,
+        isCompacting,
         isImageGenerationMode,
         isVideoGenerationMode,
         fileContext,
@@ -1397,6 +1648,17 @@ export default function Chat ({ sessionId, initialStack }) {
                 <div ref={scrollContainerRef} className='overflow-y-auto bottom-8'>
                     <SpaceBetween direction='vertical' size='l'>
 
+                        {/* Sentinel for infinite scroll upward — triggers loading older messages */}
+                        {hasOlderMessages && !loadingSession && (
+                            <div ref={topSentinelRef} style={{ height: '1px' }}>
+                                {isLoadingOlder && (
+                                    <Box textAlign='center' padding='xs'>
+                                        <Spinner size='normal' /> Loading older messages...
+                                    </Box>
+                                )}
+                            </div>
+                        )}
+
                         {loadingSession && (
                             <Box textAlign='center' padding='l'>
                                 <SpaceBetween size='s' direction='vertical'>
@@ -1431,6 +1693,16 @@ export default function Chat ({ sessionId, initialStack }) {
                             />));
                             // eslint-disable-next-line react-hooks/exhaustive-deps
                         }, [session.history, chatConfiguration, loadingSession])}
+
+                        {!loadingSession && isCompacting && (
+                            <Box textAlign='center' padding='l'>
+                                <SpaceBetween size='s' direction='vertical'>
+                                    <Spinner size='large' />
+                                    <Box color='text-status-info'>Compacting conversation history...</Box>
+                                    <Box variant='small' color='text-status-inactive'>Summarizing older messages to optimize context window</Box>
+                                </SpaceBetween>
+                            </Box>
+                        )}
 
                         {!loadingSession && (isRunning || callingToolName) && !isStreaming && !isImageGenerationMode && !isVideoGenerationMode && <Message
                             isRunning={isRunning}
@@ -1510,6 +1782,12 @@ export default function Chat ({ sessionId, initialStack }) {
                                         selectionAvailable={ragSelectionAvailable}
                                         allowedRepositoryIds={effectiveStack ? (effectiveStack.repositoryIds ?? []) : undefined}
                                         allowedCollectionIds={effectiveStack ? (effectiveStack.collectionIds ?? []) : undefined}
+                                        onRepositoryChanged={() => {
+                                            setChatConfiguration((prev) => ({
+                                                ...prev,
+                                                sessionConfiguration: { ...prev.sessionConfiguration, ragSearchMode: undefined },
+                                            }));
+                                        }}
                                     />
                                 )}
                             </Grid>
@@ -1550,19 +1828,9 @@ export default function Chat ({ sessionId, initialStack }) {
                                             )?.contextWindow;
 
                                             if (!contextWindow || session.history.length === 0) return null;
-                                            // Sum live in-memory tokens for immediate UI updates after
-                                            // each response. Fall back to the DDB value on reload.
-                                            // Coerce to Number() because DDB Decimal values deserialize
-                                            // as strings, which cause string concatenation bugs.
-                                            const liveTokens = session.history.reduce((sum, msg) => {
-                                                const u = (msg as any).usage;
-                                                return sum + (Number(u?.completionTokens) || 0) + (Number(u?.promptTokens) || 0);
-                                            }, 0);
-
-                                            const usedTokens = liveTokens > 0
-                                                ? liveTokens
-                                                : (currentSessionSummary?.totalTokensUsed ?? 0);
-                                            if (!usedTokens) return null;
+                                            // Use the server-side totalTokensUsed from the session summary
+                                            // (avoids being impacted by pagination prepending old messages)
+                                            const usedTokens = Number(currentSessionSummary?.totalTokensUsed) || 0;
 
                                             return (
                                                 `${formatContextAndTokenCount(usedTokens)} - Tokens Used`

@@ -18,8 +18,6 @@ import { IAuthorizer, RestApi } from 'aws-cdk-lib/aws-apigateway';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Effect, IRole, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { ISecurityGroup } from 'aws-cdk-lib/aws-ec2';
-import { LayerVersion } from 'aws-cdk-lib/aws-lambda';
-import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { RemovalPolicy } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 
@@ -28,7 +26,7 @@ import { BaseProps } from '../../schema';
 import { createLambdaRole } from '../../core/utils';
 import { getAuditLoggingEnv } from '../../api-base/auditEnv';
 import { Vpc } from '../../networking/vpc';
-import { LAMBDA_PATH } from '../../util';
+import { getPythonLambdaLayers } from '../../util';
 
 type ProjectsApiProps = {
     authorizer: IAuthorizer;
@@ -37,6 +35,7 @@ type ProjectsApiProps = {
     securityGroups: ISecurityGroup[];
     vpc: Vpc;
     sessionTable: dynamodb.Table;
+    messagesTable: dynamodb.Table;
     configTable: dynamodb.Table;
     projectsTable?: dynamodb.Table;
 } & BaseProps;
@@ -47,19 +46,9 @@ export class ProjectsApi extends Construct {
     constructor (scope: Construct, id: string, props: ProjectsApiProps) {
         super(scope, id);
 
-        const { authorizer, config, restApiId, rootResourceId, securityGroups, vpc, sessionTable, configTable } = props;
+        const { authorizer, config, restApiId, rootResourceId, securityGroups, vpc, sessionTable, messagesTable, configTable } = props;
 
-        const commonLambdaLayer = LayerVersion.fromLayerVersionArn(
-            this,
-            'projects-common-lambda-layer',
-            StringParameter.valueForStringParameter(this, `${config.deploymentPrefix}/layerVersion/common`),
-        );
-
-        const fastapiLambdaLayer = LayerVersion.fromLayerVersionArn(
-            this,
-            'projects-fastapi-lambda-layer',
-            StringParameter.valueForStringParameter(this, `${config.deploymentPrefix}/layerVersion/fastapi`),
-        );
+        const lambdaLayers = getPythonLambdaLayers(this, config, ['common', 'fastapi'], 'Projects');
 
         // Use pre-created table if provided (from chatConstruct), otherwise create one
         this.projectsTable = props.projectsTable ?? new dynamodb.Table(this, 'ProjectsTable', {
@@ -79,6 +68,7 @@ export class ProjectsApi extends Construct {
         const env = {
             PROJECTS_TABLE_NAME: this.projectsTable.tableName,
             SESSIONS_TABLE_NAME: sessionTable.tableName,
+            MESSAGES_TABLE_NAME: messagesTable.tableName,
             SESSIONS_BY_USER_ID_INDEX_NAME: 'byUserId',
             CONFIG_TABLE_NAME: configTable.tableName,
             ...getAuditLoggingEnv(config),
@@ -116,6 +106,20 @@ export class ProjectsApi extends Construct {
                 effect: Effect.ALLOW,
                 actions: ['dynamodb:GetItem', 'dynamodb:Query'],
                 resources: [configTable.tableArn],
+            })
+        );
+
+        // Messages table — needed by delete_project's cascade-delete to remove
+        // child message rows for v2.0 sessions.
+        lambdaRole.addToPrincipalPolicy(
+            new PolicyStatement({
+                effect: Effect.ALLOW,
+                actions: [
+                    'dynamodb:Query',
+                    'dynamodb:BatchWriteItem',
+                    'dynamodb:DeleteItem',
+                ],
+                resources: [messagesTable.tableArn],
             })
         );
 
@@ -162,13 +166,12 @@ export class ProjectsApi extends Construct {
             },
         ];
 
-        const lambdaPath = config.lambdaPath || LAMBDA_PATH;
         apis.forEach((f) => {
             const lambdaFunction = registerAPIEndpoint(
                 this,
                 restApi,
-                lambdaPath,
-                [commonLambdaLayer, fastapiLambdaLayer],
+                config,
+                lambdaLayers,
                 f,
                 getPythonRuntime(),
                 vpc,

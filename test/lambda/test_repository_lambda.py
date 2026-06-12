@@ -46,10 +46,10 @@ import boto3
 import pytest
 import requests
 from botocore.config import Config
-from models.domain_objects import IngestionJob, IngestionStatus
+from lisa.domain.domain_objects import IngestionJob, IngestionStatus
+from lisa.utilities.exceptions import HTTPException
+from lisa.utilities.validation import validate_model_name, ValidationError
 from moto import mock_aws
-from utilities.exceptions import HTTPException
-from utilities.validation import validate_model_name, ValidationError
 
 # Add the lambda directory to the Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
@@ -64,7 +64,7 @@ def mock_api_wrapper(func):
     def wrapper(*args, **kwargs):
         # Import ValidationError at wrapper execution time
         try:
-            from utilities.validation import ValidationError as CustomValidationError
+            from lisa.utilities.validation import ValidationError as CustomValidationError
         except ImportError:
             CustomValidationError = None
 
@@ -254,18 +254,18 @@ patch.dict(
 ).start()
 
 # Patch specific functions from utilities.common_functions and utilities.auth
-patch("utilities.auth.get_username", mock_common.get_username).start()
-patch("utilities.auth.get_groups", mock_common.get_groups).start()
-patch("utilities.auth.is_admin", mock_common.is_admin).start()
-patch("utilities.auth.is_rag_admin", mock_common.is_rag_admin).start()
-patch("utilities.auth.get_user_context", mock_common.get_user_context).start()
-patch("utilities.common_functions.retry_config", retry_config).start()
-patch("utilities.common_functions.api_wrapper", mock_api_wrapper).start()
-patch("utilities.common_functions.get_id_token", mock_common.get_id_token).start()
-patch("utilities.common_functions.get_cert_path", mock_common.get_cert_path).start()
-_admin_only_patch = patch("utilities.auth.admin_only", mock_admin_only)
+patch("lisa.utilities.auth.get_username", mock_common.get_username).start()
+patch("lisa.utilities.auth.get_groups", mock_common.get_groups).start()
+patch("lisa.utilities.auth.is_admin", mock_common.is_admin).start()
+patch("lisa.utilities.auth.is_rag_admin", mock_common.is_rag_admin).start()
+patch("lisa.utilities.auth.get_user_context", mock_common.get_user_context).start()
+patch("lisa.utilities.common_functions.retry_config", retry_config).start()
+patch("lisa.utilities.common_functions.api_wrapper", mock_api_wrapper).start()
+patch("lisa.utilities.common_functions.get_id_token", mock_common.get_id_token).start()
+patch("lisa.utilities.common_functions.get_cert_path", mock_common.get_cert_path).start()
+_admin_only_patch = patch("lisa.utilities.auth.admin_only", mock_admin_only)
 _admin_only_patch.start()
-_rag_admin_or_admin_patch = patch("utilities.auth.rag_admin_or_admin", mock_admin_only)
+_rag_admin_or_admin_patch = patch("lisa.utilities.auth.rag_admin_or_admin", mock_admin_only)
 _rag_admin_or_admin_patch.start()
 
 
@@ -389,7 +389,7 @@ def test_list_all():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.list_all", side_effect=mock_list_all_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {
                 "requestContext": {
@@ -416,7 +416,7 @@ def test_list_status():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.list_status", side_effect=mock_list_status_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {"requestContext": {"authorizer": {"claims": {"username": "test-user"}}}}
 
@@ -442,7 +442,7 @@ def test_similarity_search():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.similarity_search", side_effect=mock_similarity_search_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {
                 "requestContext": {
@@ -476,7 +476,7 @@ def test_ingest_documents():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.ingest_documents", side_effect=mock_ingest_documents_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {
                 "requestContext": {
@@ -506,7 +506,7 @@ def test_download_document():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.download_document", side_effect=mock_download_document_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {
                 "requestContext": {
@@ -532,7 +532,7 @@ def test_list_docs():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.list_docs", side_effect=mock_list_docs_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {
                 "requestContext": {
@@ -561,7 +561,7 @@ def test_delete():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.delete", side_effect=mock_delete_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {
                 "requestContext": {"authorizer": {"claims": {"username": "test-user"}}},
@@ -595,7 +595,7 @@ def test_delete_documents_by_id():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.delete_documents", side_effect=mock_delete_documents_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {
                 "requestContext": {
@@ -626,7 +626,7 @@ def test_delete_documents_by_name():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.delete_documents", side_effect=mock_delete_documents_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {
                 "requestContext": {
@@ -656,7 +656,7 @@ def test_delete_documents_error():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.delete_documents", side_effect=mock_delete_documents_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event with missing parameters
             event = {
                 "requestContext": {
@@ -685,7 +685,7 @@ def test_delete_documents_unauthorized():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.delete_documents", side_effect=mock_delete_documents_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {
                 "requestContext": {
@@ -736,7 +736,7 @@ def test_create():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.create", side_effect=mock_create_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {
                 "requestContext": {"authorizer": {"claims": {"username": "test-user"}}},
@@ -767,7 +767,7 @@ def test_delete_legacy():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.delete", side_effect=mock_delete_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {
                 "requestContext": {"authorizer": {"claims": {"username": "test-user"}}},
@@ -797,7 +797,7 @@ def test_delete_missing_repository_id():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.delete", side_effect=mock_delete_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event with missing repositoryId
             event = {"requestContext": {"authorizer": {"claims": {"username": "test-user"}}}, "pathParameters": {}}
 
@@ -822,7 +822,7 @@ def test_RagEmbeddings_error():
         raise Exception("SSM error")
 
     # Patch the class from the correct module
-    with patch("repository.embeddings.RagEmbeddings", side_effect=mock_RagEmbeddings):
+    with patch("lisa.rag.embeddings.RagEmbeddings", side_effect=mock_RagEmbeddings):
         # Test that the error is properly handled
         with pytest.raises(Exception, match="SSM error"):
             mock_RagEmbeddings("test-model", "test-token")
@@ -837,7 +837,7 @@ def test_similarity_search_forbidden():
 
     # Patch the api_wrapper to properly wrap our mock function
     with patch("repository.lambda_functions.similarity_search", side_effect=mock_similarity_search_func):
-        with patch("utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
+        with patch("lisa.utilities.common_functions.api_wrapper", side_effect=mock_api_wrapper):
             # Create test event
             event = {
                 "requestContext": {
@@ -887,7 +887,7 @@ def test_pipeline_embeddings_embed_documents_error():
     mock_embeddings.embed_documents.side_effect = mock_embed_documents
 
     # Patch RagEmbeddings_pipeline to return our mock
-    with patch("repository.embeddings.RagEmbeddings", return_value=mock_embeddings):
+    with patch("lisa.rag.embeddings.RagEmbeddings", return_value=mock_embeddings):
         embeddings = mock_embeddings
 
         # Test that the error is properly handled
@@ -907,7 +907,7 @@ def test_embeddings_embed_query_error():
     mock_embeddings.embed_query.side_effect = mock_embed_query
 
     # Patch RagEmbeddings_pipeline to return our mock
-    with patch("repository.embeddings.RagEmbeddings", return_value=mock_embeddings):
+    with patch("lisa.rag.embeddings.RagEmbeddings", return_value=mock_embeddings):
         embeddings = mock_embeddings
 
         # Test with invalid input
@@ -943,7 +943,7 @@ def test_get_repository_unauthorized():
 
 def test_document_ownership_validation():
     """Test document ownership validation logic"""
-    from models.domain_objects import ChunkingStrategyType, FixedChunkingStrategy, RagDocument
+    from lisa.domain.domain_objects import ChunkingStrategyType, FixedChunkingStrategy, RagDocument
 
     # Test case 1: User is admin
     event = {"requestContext": {"authorizer": {"claims": {"username": "admin-user"}}}}
@@ -1082,11 +1082,11 @@ def test_repository_access_validation():
 
 def test_RagEmbeddings_function():
     """Test the RagEmbeddings function"""
-    from repository.embeddings import RagEmbeddings
+    from lisa.rag.embeddings import RagEmbeddings
 
-    with patch("repository.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
-        "repository.embeddings.get_cert_path"
-    ) as mock_cert, patch("repository.embeddings.get_management_key") as mock_key:
+    with patch("lisa.rag.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
+        "lisa.rag.embeddings.get_cert_path"
+    ) as mock_cert, patch("lisa.rag.embeddings.get_management_key") as mock_key:
 
         mock_endpoint.return_value = "https://api.example.com"
         mock_cert.return_value = "/path/to/cert"
@@ -1101,11 +1101,11 @@ def test_RagEmbeddings_function():
 
 def test_pipeline_embeddings_init():
     """Test RagEmbeddings initialization"""
-    from repository.embeddings import RagEmbeddings
+    from lisa.rag.embeddings import RagEmbeddings
 
-    with patch("repository.embeddings.get_management_key") as mock_management_key, patch(
-        "repository.embeddings.get_rest_api_container_endpoint"
-    ) as mock_endpoint, patch("repository.embeddings.get_cert_path") as mock_cert:
+    with patch("lisa.rag.embeddings.get_management_key") as mock_management_key, patch(
+        "lisa.rag.embeddings.get_rest_api_container_endpoint"
+    ) as mock_endpoint, patch("lisa.rag.embeddings.get_cert_path") as mock_cert:
 
         mock_management_key.return_value = "test-token"
         mock_endpoint.return_value = "https://api.example.com"
@@ -1122,9 +1122,9 @@ def test_pipeline_embeddings_init():
 
 def test_pipeline_embeddings_init_error():
     """Test LisaOpenAIEmbeddings initialization error handling"""
-    from repository.embeddings import RagEmbeddings
+    from lisa.rag.embeddings import RagEmbeddings
 
-    with patch("repository.embeddings.ssm_client") as mock_ssm:
+    with patch("lisa.rag.embeddings.ssm_client") as mock_ssm:
         mock_ssm.get_parameter.side_effect = Exception("SSM error")
 
         with pytest.raises(Exception):
@@ -1133,11 +1133,11 @@ def test_pipeline_embeddings_init_error():
 
 def test_pipeline_embeddings_embed_documents():
     """Test RagEmbeddings embed_documents method"""
-    from repository.embeddings import RagEmbeddings
+    from lisa.rag.embeddings import RagEmbeddings
 
-    with patch("repository.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
-        "repository.embeddings.get_cert_path"
-    ) as mock_cert, patch("repository.embeddings._get_http_session") as mock_get_session:
+    with patch("lisa.rag.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
+        "lisa.rag.embeddings.get_cert_path"
+    ) as mock_cert, patch("lisa.rag.embeddings._get_http_session") as mock_get_session:
 
         mock_endpoint.return_value = "https://api.example.com"
         mock_cert.return_value = "/path/to/cert"
@@ -1162,11 +1162,11 @@ def test_pipeline_embeddings_embed_documents():
 
 def test_pipeline_embeddings_embed_documents_no_texts():
     """Test RagEmbeddings embed_documents with no texts"""
-    from repository.embeddings import RagEmbeddings
+    from lisa.rag.embeddings import RagEmbeddings
 
-    with patch("repository.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
-        "repository.embeddings.get_cert_path"
-    ) as mock_cert, patch("repository.embeddings.get_management_key") as mock_key:
+    with patch("lisa.rag.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
+        "lisa.rag.embeddings.get_cert_path"
+    ) as mock_cert, patch("lisa.rag.embeddings.get_management_key") as mock_key:
 
         mock_endpoint.return_value = "https://api.example.com"
         mock_cert.return_value = "/path/to/cert"
@@ -1180,11 +1180,11 @@ def test_pipeline_embeddings_embed_documents_no_texts():
 
 def test_pipeline_embeddings_embed_documents_api_error():
     """Test RagEmbeddings embed_documents with API error"""
-    from repository.embeddings import RagEmbeddings
+    from lisa.rag.embeddings import RagEmbeddings
 
-    with patch("repository.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
-        "repository.embeddings.get_cert_path"
-    ) as mock_cert, patch("repository.embeddings._get_http_session") as mock_get_session:
+    with patch("lisa.rag.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
+        "lisa.rag.embeddings.get_cert_path"
+    ) as mock_cert, patch("lisa.rag.embeddings._get_http_session") as mock_get_session:
 
         mock_endpoint.return_value = "https://api.example.com"
         mock_cert.return_value = "/path/to/cert"
@@ -1201,11 +1201,11 @@ def test_pipeline_embeddings_embed_documents_api_error():
 
 def test_pipeline_embeddings_embed_documents_timeout():
     """Test RagEmbeddings embed_documents with timeout"""
-    from repository.embeddings import RagEmbeddings
+    from lisa.rag.embeddings import RagEmbeddings
 
-    with patch("repository.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
-        "repository.embeddings.get_cert_path"
-    ) as mock_cert, patch("repository.embeddings._get_http_session") as mock_get_session:
+    with patch("lisa.rag.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
+        "lisa.rag.embeddings.get_cert_path"
+    ) as mock_cert, patch("lisa.rag.embeddings._get_http_session") as mock_get_session:
 
         mock_endpoint.return_value = "https://api.example.com"
         mock_cert.return_value = "/path/to/cert"
@@ -1222,11 +1222,11 @@ def test_pipeline_embeddings_embed_documents_timeout():
 
 def test_pipeline_embeddings_embed_documents_different_formats():
     """Test RagEmbeddings embed_documents with different response formats"""
-    from repository.embeddings import RagEmbeddings
+    from lisa.rag.embeddings import RagEmbeddings
 
-    with patch("repository.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
-        "repository.embeddings.get_cert_path"
-    ) as mock_cert, patch("repository.embeddings._get_http_session") as mock_get_session:
+    with patch("lisa.rag.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
+        "lisa.rag.embeddings.get_cert_path"
+    ) as mock_cert, patch("lisa.rag.embeddings._get_http_session") as mock_get_session:
 
         mock_endpoint.return_value = "https://api.example.com"
         mock_cert.return_value = "/path/to/cert"
@@ -1252,11 +1252,11 @@ def test_pipeline_embeddings_embed_documents_different_formats():
 
 def test_pipeline_embeddings_embed_documents_no_embeddings():
     """Test RagEmbeddings embed_documents with no embeddings in response"""
-    from repository.embeddings import RagEmbeddings
+    from lisa.rag.embeddings import RagEmbeddings
 
-    with patch("repository.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
-        "repository.embeddings.get_cert_path"
-    ) as mock_cert, patch("repository.embeddings._get_http_session") as mock_get_session:
+    with patch("lisa.rag.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
+        "lisa.rag.embeddings.get_cert_path"
+    ) as mock_cert, patch("lisa.rag.embeddings._get_http_session") as mock_get_session:
 
         mock_endpoint.return_value = "https://api.example.com"
         mock_cert.return_value = "/path/to/cert"
@@ -1277,11 +1277,11 @@ def test_pipeline_embeddings_embed_documents_no_embeddings():
 
 def test_pipeline_embeddings_embed_documents_mismatch():
     """Test RagEmbeddings embed_documents with embedding count mismatch"""
-    from repository.embeddings import RagEmbeddings
+    from lisa.rag.embeddings import RagEmbeddings
 
-    with patch("repository.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
-        "repository.embeddings.get_cert_path"
-    ) as mock_cert, patch("repository.embeddings._get_http_session") as mock_get_session:
+    with patch("lisa.rag.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
+        "lisa.rag.embeddings.get_cert_path"
+    ) as mock_cert, patch("lisa.rag.embeddings._get_http_session") as mock_get_session:
 
         mock_endpoint.return_value = "https://api.example.com"
         mock_cert.return_value = "/path/to/cert"
@@ -1302,11 +1302,11 @@ def test_pipeline_embeddings_embed_documents_mismatch():
 
 def test_pipeline_embeddings_embed_query():
     """Test RagEmbeddings embed_query method"""
-    from repository.embeddings import RagEmbeddings
+    from lisa.rag.embeddings import RagEmbeddings
 
-    with patch("repository.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
-        "repository.embeddings.get_cert_path"
-    ) as mock_cert, patch("repository.embeddings._get_http_session") as mock_get_session:
+    with patch("lisa.rag.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
+        "lisa.rag.embeddings.get_cert_path"
+    ) as mock_cert, patch("lisa.rag.embeddings._get_http_session") as mock_get_session:
 
         mock_endpoint.return_value = "https://api.example.com"
         mock_cert.return_value = "/path/to/cert"
@@ -1327,11 +1327,11 @@ def test_pipeline_embeddings_embed_query():
 
 def test_pipeline_embeddings_embed_query_invalid():
     """Test RagEmbeddings embed_query with invalid input"""
-    from repository.embeddings import RagEmbeddings
+    from lisa.rag.embeddings import RagEmbeddings
 
-    with patch("repository.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
-        "repository.embeddings.get_cert_path"
-    ) as mock_cert, patch("repository.embeddings.get_management_key") as mock_key:
+    with patch("lisa.rag.embeddings.get_rest_api_container_endpoint") as mock_endpoint, patch(
+        "lisa.rag.embeddings.get_cert_path"
+    ) as mock_cert, patch("lisa.rag.embeddings.get_management_key") as mock_key:
 
         mock_endpoint.return_value = "https://api.example.com"
         mock_cert.return_value = "/path/to/cert"
@@ -1352,7 +1352,7 @@ def test_real_list_all_function():
 
     # Mock the vs_repo to return test data
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
-        "utilities.auth.get_groups"
+        "lisa.utilities.auth.get_groups"
     ) as mock_get_groups:
 
         mock_get_groups.return_value = ["test-group"]
@@ -1375,6 +1375,111 @@ def test_real_list_all_function():
         assert body[0]["name"] == "Test Repo"
 
 
+def test_list_all_includes_supports_hybrid_search():
+    """list_all enriches each repo with supportsHybridSearch from the backend service."""
+    from repository.lambda_functions import list_all
+
+    with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
+        "lisa.utilities.auth.get_groups"
+    ) as mock_get_groups:
+        mock_get_groups.return_value = ["test-group"]
+        mock_vs_repo.get_registered_repositories.return_value = [
+            {
+                "repositoryId": "os-repo",
+                "name": "OpenSearch Repo",
+                "type": "opensearch",
+                "allowedGroups": ["test-group"],
+                "status": "active",
+            },
+            {
+                "repositoryId": "kb-repo",
+                "name": "Bedrock KB Repo",
+                "type": "bedrock_knowledge_base",
+                "allowedGroups": ["test-group"],
+                "status": "active",
+                "knowledgeBaseId": "KB123",
+            },
+        ]
+
+        event = {
+            "requestContext": {
+                "authorizer": {"claims": {"username": "test-user"}, "groups": json.dumps(["test-group"])}
+            }
+        }
+
+        result = list_all(event, SimpleNamespace())
+
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert len(body) == 2
+
+        os_repo = next(r for r in body if r["repositoryId"] == "os-repo")
+        kb_repo = next(r for r in body if r["repositoryId"] == "kb-repo")
+
+        assert os_repo["supportsHybridSearch"] is True
+        assert kb_repo["supportsHybridSearch"] is True
+
+
+def test_list_all_supports_hybrid_search_is_capability_driven():
+    """list_all delegates to RepositoryService.supports_hybrid_search(), not a type check.
+
+    Guards against regression to hardcoded RepositoryType.is_type(...) — we want OpenSearch
+    and other backends to flip on automatically when their service reports capability.
+    """
+    from repository.lambda_functions import list_all
+
+    repos = [
+        {
+            "repositoryId": "os-repo",
+            "name": "OpenSearch Repo",
+            "type": "opensearch",
+            "allowedGroups": ["test-group"],
+            "status": "active",
+        },
+        {
+            "repositoryId": "kb-repo",
+            "name": "Bedrock KB Repo",
+            "type": "bedrock_knowledge_base",
+            "allowedGroups": ["test-group"],
+            "status": "active",
+        },
+    ]
+
+    def fake_create_service(repo):
+        service = MagicMock()
+        # Invert the natural defaults: OpenSearch=True, BedrockKB=False.
+        # A type-hardcoded implementation would still return False/True respectively
+        # and fail this test.
+        service.supports_hybrid_search.return_value = repo["type"] == "opensearch"
+        return service
+
+    with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
+        "lisa.utilities.auth.get_groups"
+    ) as mock_get_groups, patch(
+        "repository.lambda_functions.RepositoryServiceFactory.create_service",
+        side_effect=fake_create_service,
+    ):
+        mock_get_groups.return_value = ["test-group"]
+        mock_vs_repo.get_registered_repositories.return_value = repos
+
+        event = {
+            "requestContext": {
+                "authorizer": {"claims": {"username": "test-user"}, "groups": json.dumps(["test-group"])}
+            }
+        }
+
+        result = list_all(event, SimpleNamespace())
+
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+
+        os_repo = next(r for r in body if r["repositoryId"] == "os-repo")
+        kb_repo = next(r for r in body if r["repositoryId"] == "kb-repo")
+
+        assert os_repo["supportsHybridSearch"] is True
+        assert kb_repo["supportsHybridSearch"] is False
+
+
 def test_real_list_status_function():
     """Test the actual list_status function with real imports"""
     from repository.lambda_functions import list_status
@@ -1385,7 +1490,7 @@ def test_real_list_status_function():
         event = {"requestContext": {"authorizer": {"claims": {"username": "admin-user"}}}}
 
         # Mock admin check
-        with patch("utilities.auth.is_admin", return_value=True):
+        with patch("lisa.utilities.auth.is_admin", return_value=True):
             result = list_status(event, SimpleNamespace())
 
             # The function is wrapped by api_wrapper, so we get an HTTP response
@@ -1399,9 +1504,9 @@ def test_real_similarity_search_function():
     from repository.lambda_functions import similarity_search
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
-        "repository.embeddings.RagEmbeddings"
-    ) as mock_RagEmbeddings, patch("utilities.auth.get_groups") as mock_get_groups, patch(
-        "utilities.common_functions.get_id_token"
+        "lisa.rag.embeddings.RagEmbeddings"
+    ) as mock_RagEmbeddings, patch("lisa.utilities.auth.get_groups") as mock_get_groups, patch(
+        "lisa.utilities.common_functions.get_id_token"
     ) as mock_get_token:
 
         # Setup mocks
@@ -1418,10 +1523,14 @@ def test_real_similarity_search_function():
         mock_RagEmbeddings.return_value = mock_embeddings
 
         # Mock the service layer
+        from lisa.domain.domain_objects import RetrieveResult
+
         mock_service = MagicMock()
-        mock_service.retrieve_documents.return_value = [
-            {"page_content": "Test content", "metadata": {"source": "test-source"}}
-        ]
+        mock_service.retrieve_documents.return_value = RetrieveResult(
+            documents=[{"page_content": "Test content", "metadata": {"source": "test-source"}}],
+            actual_mode_used="vector",
+            hybrid_supported=False,
+        )
 
         with patch("repository.lambda_functions.RepositoryServiceFactory") as mock_factory:
             mock_factory.create_service.return_value = mock_service
@@ -1470,10 +1579,10 @@ def test_real_delete_documents_function():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.doc_repo"
-    ) as mock_doc_repo, patch("utilities.auth.get_groups") as mock_get_groups, patch(
-        "utilities.auth.get_username"
+    ) as mock_doc_repo, patch("lisa.utilities.auth.get_groups") as mock_get_groups, patch(
+        "lisa.utilities.auth.get_username"
     ) as mock_get_username, patch(
-        "utilities.auth.is_admin"
+        "lisa.utilities.auth.is_admin"
     ) as mock_is_admin:
 
         # Setup mocks
@@ -1505,8 +1614,8 @@ def test_real_ingest_documents_function():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.ingestion_service"
-    ) as mock_ingestion, patch("utilities.auth.get_groups") as mock_get_groups, patch(
-        "utilities.auth.get_username"
+    ) as mock_ingestion, patch("lisa.utilities.auth.get_groups") as mock_get_groups, patch(
+        "lisa.utilities.auth.get_username"
     ) as mock_get_username:
 
         # Setup mocks
@@ -1538,11 +1647,11 @@ def test_real_download_document_function():
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.doc_repo"
     ) as mock_doc_repo, patch("repository.lambda_functions.s3") as mock_s3, patch(
-        "utilities.auth.get_groups"
+        "lisa.utilities.auth.get_groups"
     ) as mock_get_groups, patch(
-        "utilities.auth.get_username"
+        "lisa.utilities.auth.get_username"
     ) as mock_get_username, patch(
-        "utilities.auth.is_admin"
+        "lisa.utilities.auth.is_admin"
     ) as mock_is_admin:
 
         # Setup mocks
@@ -1583,7 +1692,7 @@ def test_real_list_docs_function():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.doc_repo"
-    ) as mock_doc_repo, patch("utilities.auth.get_groups") as mock_get_groups:
+    ) as mock_doc_repo, patch("lisa.utilities.auth.get_groups") as mock_get_groups:
 
         # Setup mocks
         mock_get_groups.return_value = ["test-group"]
@@ -1618,7 +1727,7 @@ def test_list_docs_with_pagination():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.doc_repo"
-    ) as mock_doc_repo, patch("utilities.auth.get_groups") as mock_get_groups:
+    ) as mock_doc_repo, patch("lisa.utilities.auth.get_groups") as mock_get_groups:
 
         # Setup mocks
         mock_get_groups.return_value = ["test-group"]
@@ -1666,7 +1775,7 @@ def test_list_docs_with_previous_page():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.doc_repo"
-    ) as mock_doc_repo, patch("utilities.auth.get_groups") as mock_get_groups:
+    ) as mock_doc_repo, patch("lisa.utilities.auth.get_groups") as mock_get_groups:
 
         # Setup mocks
         mock_get_groups.return_value = ["test-group"]
@@ -1703,7 +1812,7 @@ def test_list_docs_with_custom_page_size():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.doc_repo"
-    ) as mock_doc_repo, patch("utilities.auth.get_groups") as mock_get_groups:
+    ) as mock_doc_repo, patch("lisa.utilities.auth.get_groups") as mock_get_groups:
 
         # Setup mocks
         mock_get_groups.return_value = ["test-group"]
@@ -1737,7 +1846,7 @@ def test_list_docs_with_edge_case_page_sizes():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.doc_repo"
-    ) as mock_doc_repo, patch("utilities.auth.get_groups") as mock_get_groups:
+    ) as mock_doc_repo, patch("lisa.utilities.auth.get_groups") as mock_get_groups:
 
         # Setup mocks
         mock_get_groups.return_value = ["test-group"]
@@ -1773,7 +1882,7 @@ def test_list_docs_with_encoded_pagination_keys():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.doc_repo"
-    ) as mock_doc_repo, patch("utilities.auth.get_groups") as mock_get_groups:
+    ) as mock_doc_repo, patch("lisa.utilities.auth.get_groups") as mock_get_groups:
 
         # Setup mocks
         mock_get_groups.return_value = ["test-group"]
@@ -1812,7 +1921,7 @@ def test_real_create_function():
 
     with patch("repository.lambda_functions.step_functions_client") as mock_sf, patch(
         "repository.lambda_functions.ssm_client"
-    ) as mock_ssm, patch("utilities.auth.is_admin") as mock_is_admin:
+    ) as mock_ssm, patch("lisa.utilities.auth.is_admin") as mock_is_admin:
 
         # Setup mocks
         mock_is_admin.return_value = True
@@ -1838,8 +1947,8 @@ def test_real_delete_function():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.step_functions_client"
-    ) as mock_sf, patch("repository.embeddings.ssm_client") as mock_ssm, patch(
-        "utilities.auth.is_admin"
+    ) as mock_sf, patch("lisa.rag.embeddings.ssm_client") as mock_ssm, patch(
+        "lisa.utilities.auth.is_admin"
     ) as mock_is_admin:
 
         # Setup mocks
@@ -1866,7 +1975,7 @@ def test_real_delete_function_legacy():
     from repository.lambda_functions import delete
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
-        "utilities.auth.is_admin"
+        "lisa.utilities.auth.is_admin"
     ) as mock_is_admin, patch("repository.lambda_functions._remove_legacy") as mock_remove_legacy:
 
         # Setup mocks
@@ -2028,7 +2137,7 @@ def test_real_similarity_search_bedrock_kb_function():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.bedrock_client"
-    ) as mock_bedrock, patch("utilities.auth.get_groups") as mock_get_groups, patch(
+    ) as mock_bedrock, patch("lisa.utilities.auth.get_groups") as mock_get_groups, patch(
         "repository.lambda_functions.collection_service"
     ) as mock_collection_service, patch(
         "repository.lambda_functions.enrich_metadata_with_document_id"
@@ -2104,10 +2213,10 @@ def test_list_jobs_function():
     try:
         with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
             "repository.lambda_functions.ingestion_job_repository"
-        ) as mock_job_repo, patch("utilities.auth.get_groups") as mock_get_groups, patch(
-            "utilities.auth.is_admin"
+        ) as mock_job_repo, patch("lisa.utilities.auth.get_groups") as mock_get_groups, patch(
+            "lisa.utilities.auth.is_admin"
         ) as mock_is_admin, patch(
-            "utilities.auth.get_username"
+            "lisa.utilities.auth.get_username"
         ) as mock_get_username, patch(
             "repository.lambda_functions.get_user_context"
         ) as mock_get_user_context:
@@ -2200,7 +2309,7 @@ def test_list_jobs_missing_repository_id():
     """Test list_jobs function with missing repository ID"""
     from repository.lambda_functions import list_jobs
 
-    with patch("utilities.auth.is_admin") as mock_is_admin:
+    with patch("lisa.utilities.auth.is_admin") as mock_is_admin:
         mock_is_admin.return_value = True
 
         event = {
@@ -2224,8 +2333,8 @@ def test_list_jobs_unauthorized_access():
     from repository.lambda_functions import list_jobs
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
-        "utilities.auth.get_groups"
-    ) as mock_get_groups, patch("utilities.auth.is_admin") as mock_is_admin:
+        "lisa.utilities.auth.get_groups"
+    ) as mock_get_groups, patch("lisa.utilities.auth.is_admin") as mock_is_admin:
 
         # Setup mocks - user is not admin and doesn't have group access
         mock_get_groups.return_value = ["other-group"]
@@ -2259,10 +2368,10 @@ def test_list_jobs_empty_results():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.ingestion_job_repository"
-    ) as mock_job_repo, patch("utilities.auth.get_groups") as mock_get_groups, patch(
-        "utilities.auth.is_admin"
+    ) as mock_job_repo, patch("lisa.utilities.auth.get_groups") as mock_get_groups, patch(
+        "lisa.utilities.auth.is_admin"
     ) as mock_is_admin, patch(
-        "utilities.auth.get_username"
+        "lisa.utilities.auth.get_username"
     ) as mock_get_username:
 
         # Setup mocks
@@ -2306,8 +2415,8 @@ def test_list_jobs_malformed_dynamodb_items():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.ingestion_job_repository"
-    ) as mock_job_repo, patch("utilities.auth.get_groups") as mock_get_groups, patch(
-        "utilities.auth.is_admin"
+    ) as mock_job_repo, patch("lisa.utilities.auth.get_groups") as mock_get_groups, patch(
+        "lisa.utilities.auth.is_admin"
     ) as mock_is_admin:
 
         # Setup mocks
@@ -2346,10 +2455,10 @@ def test_list_jobs_with_pagination():
     try:
         with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
             "repository.lambda_functions.ingestion_job_repository"
-        ) as mock_job_repo, patch("utilities.auth.get_groups") as mock_get_groups, patch(
-            "utilities.auth.is_admin"
+        ) as mock_job_repo, patch("lisa.utilities.auth.get_groups") as mock_get_groups, patch(
+            "lisa.utilities.auth.is_admin"
         ) as mock_is_admin, patch(
-            "utilities.auth.get_username"
+            "lisa.utilities.auth.get_username"
         ) as mock_get_username, patch(
             "repository.lambda_functions.get_user_context"
         ) as mock_get_user_context:
@@ -2439,10 +2548,10 @@ def test_list_jobs_with_last_evaluated_key():
     try:
         with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
             "repository.lambda_functions.ingestion_job_repository"
-        ) as mock_job_repo, patch("utilities.auth.get_groups") as mock_get_groups, patch(
-            "utilities.auth.is_admin"
+        ) as mock_job_repo, patch("lisa.utilities.auth.get_groups") as mock_get_groups, patch(
+            "lisa.utilities.auth.is_admin"
         ) as mock_is_admin, patch(
-            "utilities.auth.get_username"
+            "lisa.utilities.auth.get_username"
         ) as mock_get_username, patch(
             "repository.lambda_functions.get_user_context"
         ) as mock_get_user_context:
@@ -2523,7 +2632,7 @@ def test_list_jobs_with_last_evaluated_key():
 @mock_aws()
 def test_ingest_documents_with_chunking_override():
     """Test ingest_documents with chunking strategy override"""
-    from models.domain_objects import CollectionStatus, FixedChunkingStrategy, RagCollectionConfig
+    from lisa.domain.domain_objects import CollectionStatus, FixedChunkingStrategy, RagCollectionConfig
     from repository.lambda_functions import ingest_documents
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
@@ -2609,8 +2718,8 @@ def test_ingest_documents_with_chunking_override():
 
 def test_ingest_documents_access_denied():
     """Test ingest_documents with access denied to collection"""
+    from lisa.utilities.validation import ValidationError
     from repository.lambda_functions import ingest_documents
-    from utilities.validation import ValidationError
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs_repo, patch(
         "repository.lambda_functions.collection_service"
@@ -2684,8 +2793,8 @@ def test_get_repository_with_access():
 
 def test_get_repository_no_access():
     """Test get_repository without access"""
+    from lisa.utilities.exceptions import HTTPException
     from repository.lambda_functions import get_repository
-    from utilities.exceptions import HTTPException
 
     with patch("repository.lambda_functions.vs_repo") as mock_repo, patch(
         "repository.lambda_functions.is_admin", return_value=False
@@ -2699,7 +2808,7 @@ def test_get_repository_no_access():
 
 def test_similarity_search_with_score():
     """Test retrieve_documents with score via service layer"""
-    from repository.services.opensearch_repository_service import OpenSearchRepositoryService
+    from lisa.rag.services.opensearch_repository_service import OpenSearchRepositoryService
 
     repository = {"repositoryId": "test-repo", "type": "opensearch"}
     service = OpenSearchRepositoryService(repository)
@@ -2711,17 +2820,17 @@ def test_similarity_search_with_score():
     mock_vs.similarity_search_with_score.return_value = [(mock_doc, 0.9)]
     mock_vs.client.indices.exists.return_value = True
 
-    with patch("repository.services.opensearch_repository_service.RagEmbeddings"):
+    with patch("lisa.rag.services.opensearch_repository_service.RagEmbeddings"):
         with patch.object(service, "_get_vector_store_client", return_value=mock_vs):
             result = service.retrieve_documents("query", "test-collection", 3, "test-model", include_score=True)
 
-    assert len(result) == 1
-    assert "similarity_score" in result[0]["metadata"]
+    assert len(result.documents) == 1
+    assert "similarity_score" in result.documents[0]["metadata"]
 
 
 def test_similarity_search_without_score():
     """Test retrieve_documents without score via service layer"""
-    from repository.services.opensearch_repository_service import OpenSearchRepositoryService
+    from lisa.rag.services.opensearch_repository_service import OpenSearchRepositoryService
 
     repository = {"repositoryId": "test-repo", "type": "opensearch"}
     service = OpenSearchRepositoryService(repository)
@@ -2733,17 +2842,17 @@ def test_similarity_search_without_score():
     mock_doc.metadata = {"source": "test"}
     mock_vs.similarity_search_with_score.return_value = [(mock_doc, 0.9)]
 
-    with patch("repository.services.opensearch_repository_service.RagEmbeddings"):
+    with patch("lisa.rag.services.opensearch_repository_service.RagEmbeddings"):
         with patch.object(service, "_get_vector_store_client", return_value=mock_vs):
             result = service.retrieve_documents("query", "test-collection", 3, "test-model", include_score=False)
 
-    assert len(result) == 1
-    assert result[0]["page_content"] == "test content"
+    assert len(result.documents) == 1
+    assert result.documents[0]["page_content"] == "test content"
 
 
 def test_ensure_document_ownership_admin():
     """Test _ensure_document_ownership with admin"""
-    from models.domain_objects import FixedChunkingStrategy, RagDocument
+    from lisa.domain.domain_objects import FixedChunkingStrategy, RagDocument
     from repository.lambda_functions import _ensure_document_ownership
 
     with patch("repository.lambda_functions.get_username", return_value="admin"), patch(
@@ -2765,7 +2874,7 @@ def test_ensure_document_ownership_admin():
 
 def test_ensure_document_ownership_owner():
     """Test _ensure_document_ownership with owner"""
-    from models.domain_objects import FixedChunkingStrategy, RagDocument
+    from lisa.domain.domain_objects import FixedChunkingStrategy, RagDocument
     from repository.lambda_functions import _ensure_document_ownership
 
     with patch("repository.lambda_functions.get_username", return_value="user1"), patch(
@@ -2787,7 +2896,7 @@ def test_ensure_document_ownership_owner():
 
 def test_ensure_document_ownership_not_owner():
     """Test _ensure_document_ownership without ownership"""
-    from models.domain_objects import FixedChunkingStrategy, RagDocument
+    from lisa.domain.domain_objects import FixedChunkingStrategy, RagDocument
     from repository.lambda_functions import _ensure_document_ownership
 
     with patch("repository.lambda_functions.get_username", return_value="user1"), patch(
@@ -2816,8 +2925,8 @@ def test_list_all_with_groups():
         "repository.lambda_functions.get_user_context", return_value=("test-user", False, ["group1"])
     ), patch("repository.lambda_functions.is_admin", return_value=False):
         mock_repo.get_registered_repositories.return_value = [
-            {"allowedGroups": ["group1"], "name": "repo1"},
-            {"allowedGroups": ["group2"], "name": "repo2"},
+            {"allowedGroups": ["group1"], "name": "repo1", "type": "opensearch"},
+            {"allowedGroups": ["group2"], "name": "repo2", "type": "opensearch"},
         ]
         event = {}
         context = SimpleNamespace(function_name="test", aws_request_id="123")
@@ -2981,7 +3090,7 @@ def test_update_repository_with_pipeline_change():
     with patch("repository.lambda_functions.vs_repo") as mock_vs, patch(
         "repository.lambda_functions.ssm_client"
     ) as mock_ssm, patch("repository.lambda_functions.step_functions_client") as mock_sf, patch(
-        "utilities.auth.is_admin"
+        "lisa.utilities.auth.is_admin"
     ) as mock_is_admin:
         # Mock admin access
         mock_is_admin.return_value = True
@@ -3090,7 +3199,7 @@ def test_update_repository_without_pipeline_change():
 
     with patch("repository.lambda_functions.vs_repo") as mock_vs, patch(
         "repository.lambda_functions.step_functions_client"
-    ) as mock_sf, patch("utilities.auth.is_admin") as mock_is_admin:
+    ) as mock_sf, patch("lisa.utilities.auth.is_admin") as mock_is_admin:
         # Mock admin access
         mock_is_admin.return_value = True
 
@@ -3139,7 +3248,7 @@ def test_create_success():
 
     with patch("repository.lambda_functions.ssm_client") as mock_ssm, patch(
         "repository.lambda_functions.step_functions_client"
-    ) as mock_sf, patch("utilities.auth.is_admin") as mock_is_admin:
+    ) as mock_sf, patch("lisa.utilities.auth.is_admin") as mock_is_admin:
         mock_is_admin.return_value = True
         mock_ssm.get_parameter.return_value = {"Parameter": {"Value": "arn:test"}}
         mock_sf.start_execution.return_value = {"executionArn": "arn:execution"}
@@ -3199,7 +3308,7 @@ def test_similarity_search_helpers():
     import os
     from unittest.mock import MagicMock, patch
 
-    from repository.services.opensearch_repository_service import OpenSearchRepositoryService
+    from lisa.rag.services.opensearch_repository_service import OpenSearchRepositoryService
 
     with patch.dict(os.environ, {"LISA_RAG_VECTOR_STORE_TABLE": "test-table"}, clear=False):
         repository = {"repositoryId": "test-repo", "type": "opensearch"}
@@ -3212,12 +3321,12 @@ def test_similarity_search_helpers():
         mock_vs.similarity_search_with_score.return_value = [(mock_doc, 0.9)]
         mock_vs.client.indices.exists.return_value = True
 
-        with patch("repository.services.opensearch_repository_service.RagEmbeddings"):
+        with patch("lisa.rag.services.opensearch_repository_service.RagEmbeddings"):
             with patch.object(service, "_get_vector_store_client", return_value=mock_vs):
-                results = service.retrieve_documents("query", "test-collection", 3, "test-model", include_score=False)
+                result = service.retrieve_documents("query", "test-collection", 3, "test-model", include_score=False)
 
-        assert len(results) == 1
-        assert results[0]["page_content"] == "test content"
+        assert len(result.documents) == 1
+        assert result.documents[0]["page_content"] == "test content"
 
 
 # Tests for list_user_collections endpoint
@@ -3839,15 +3948,24 @@ def test_similarity_search_bedrock_kb():
             "allowedGroups": ["users"],
         }
         mock_collection_service.get_collection_model.return_value = "amazon.titan-embed-text-v1"
+        from lisa.domain.domain_objects import RetrieveResult
+
         mock_service = MagicMock()
-        mock_service.retrieve_documents.return_value = [{"page_content": "test content", "metadata": {}}]
+        mock_service.retrieve_documents.return_value = RetrieveResult(
+            documents=[{"page_content": "test content", "metadata": {}}],
+            actual_mode_used="vector",
+            hybrid_supported=True,
+        )
         mock_factory.create_service.return_value = mock_service
 
         result = similarity_search(event, {})
 
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
-        assert len(body) == 1
+        assert "docs" in body
+        assert "metadata" in body
+        assert body["metadata"]["search_mode"] == "vector"
+        assert body["metadata"]["backend"] == "bedrock_knowledge_base"
 
 
 class TestRepositoryTagPreservation:
@@ -3955,7 +4073,7 @@ class TestRepositoryTagPreservation:
 
     def test_update_vector_store_request_tag_handling(self):
         """Test UpdateVectorStoreRequest preserves tags correctly."""
-        from models.domain_objects import UpdateVectorStoreRequest
+        from lisa.domain.domain_objects import UpdateVectorStoreRequest
 
         request_body = {
             "pipelines": [
@@ -3991,10 +4109,10 @@ class TestRepositoryTagPreservation:
         tags = pipeline_metadata.get("tags", [])
         assert tags == ["test"]
 
-    @patch("utilities.bedrock_kb_discovery.build_pipeline_configs_from_kb_config")
+    @patch("lisa.utilities.bedrock_kb_discovery.build_pipeline_configs_from_kb_config")
     def test_bedrock_kb_tag_preservation_fix(self, mock_build_pipeline_configs):
         """Test that Bedrock KB updates preserve existing pipeline metadata."""
-        from models.domain_objects import BedrockDataSource, BedrockKnowledgeBaseConfig
+        from lisa.domain.domain_objects import BedrockDataSource, BedrockKnowledgeBaseConfig
 
         # Mock the function to return new pipelines without metadata
         mock_build_pipeline_configs.return_value = [
@@ -4034,7 +4152,7 @@ class TestRepositoryTagPreservation:
         )
 
         # Build new pipeline configs (this currently loses metadata)
-        from utilities.bedrock_kb_discovery import build_pipeline_configs_from_kb_config
+        from lisa.utilities.bedrock_kb_discovery import build_pipeline_configs_from_kb_config
 
         new_pipelines = build_pipeline_configs_from_kb_config(kb_config)
 
@@ -4193,3 +4311,496 @@ class TestRepositoryTagPreservation:
 
         custom_fields = config["pipelines"][0]["metadata"]["customFields"]
         assert custom_fields["owner"] == "new-owner"
+
+
+# ---------------------------------------------------------------------------
+# Story 1.4: Search mode routing tests (hybrid search)
+# ---------------------------------------------------------------------------
+
+# Shared helpers for hybrid search tests
+
+
+def _bedrock_kb_repo():
+    """Return a standard Bedrock KB repository dict for hybrid search tests."""
+    return {
+        "repositoryId": "test-repo",
+        "type": "bedrock_knowledge_base",
+        "allowedGroups": ["test-group"],
+        "bedrockKnowledgeBaseConfig": {
+            "bedrockKnowledgeBaseId": "kb-123",
+            "dataSources": [{"id": "ds-123"}],
+        },
+        "status": "active",
+    }
+
+
+def _opensearch_repo():
+    """Return a standard OpenSearch repository dict for hybrid search tests."""
+    return {
+        "repositoryId": "test-repo",
+        "type": "opensearch",
+        "allowedGroups": ["test-group"],
+        "status": "active",
+    }
+
+
+def _similarity_search_event(extra_query_params=None):
+    """Build a standard similarity_search event with optional extra query params."""
+    query_params = {
+        "query": "test query",
+        "topK": "3",
+        "collectionId": "ds-123",
+    }
+    if extra_query_params:
+        query_params.update(extra_query_params)
+    return {
+        "requestContext": {"authorizer": {"claims": {"username": "test-user"}, "groups": json.dumps(["test-group"])}},
+        "pathParameters": {"repositoryId": "test-repo"},
+        "queryStringParameters": query_params,
+    }
+
+
+def _mock_service(supports_hybrid=True):
+    """Create a mock RepositoryService with configurable hybrid support."""
+    from lisa.domain.domain_objects import RetrieveResult
+
+    service = MagicMock()
+    service.supports_hybrid_search.return_value = supports_hybrid
+    service.retrieve_documents.return_value = RetrieveResult(
+        documents=[{"page_content": "semantic result", "metadata": {"source": "s3://bucket/doc1.pdf"}}],
+        actual_mode_used="vector",
+        hybrid_supported=supports_hybrid,
+    )
+    service.hybrid_retrieve.return_value = RetrieveResult(
+        documents=[{"page_content": "hybrid result", "metadata": {"source": "s3://bucket/doc1.pdf"}}],
+        actual_mode_used="hybrid",
+        hybrid_supported=True,
+    )
+    return service
+
+
+def _hybrid_search_patches(is_admin_val=False, is_rag_admin_val=False, groups=None):
+    """Context manager combining all patches needed for hybrid search tests.
+
+    Patches auth functions at the repository.lambda_functions module level
+    to avoid test-ordering issues (local imports bind at module load time).
+    """
+    from contextlib import ExitStack
+
+    if groups is None:
+        groups = ["test-group"]
+
+    stack = ExitStack()
+
+    class Patches:
+        pass
+
+    p = Patches()
+
+    def setup():
+        p.vs_repo = stack.enter_context(patch("repository.lambda_functions.vs_repo"))
+        p.factory = stack.enter_context(patch("repository.lambda_functions.RepositoryServiceFactory"))
+        p.cs = stack.enter_context(patch("repository.lambda_functions.collection_service"))
+        p.enrich = stack.enter_context(patch("repository.lambda_functions.enrich_metadata_with_document_id"))
+        stack.enter_context(patch("repository.lambda_functions.is_admin", return_value=is_admin_val))
+        stack.enter_context(patch("repository.lambda_functions.is_rag_admin", return_value=is_rag_admin_val))
+        stack.enter_context(patch("repository.lambda_functions.get_groups", return_value=groups))
+        stack.enter_context(
+            patch(
+                "repository.lambda_functions.get_user_context",
+                return_value=("test-user", is_admin_val, groups),
+            )
+        )
+        p.enrich.side_effect = lambda docs, repo_id, coll_id: docs
+        return p
+
+    return stack, setup
+
+
+def test_search_mode_vector_default(mock_auth):
+    """No searchMode param → calls retrieve_documents(), metadata shows vector mode."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _bedrock_kb_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        service = _mock_service()
+        p.factory.create_service.return_value = service
+
+        result = similarity_search(_similarity_search_event(), SimpleNamespace())
+
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert "docs" in body
+        assert "metadata" in body
+        assert body["metadata"]["search_mode"] == "vector"
+        assert body["metadata"]["actual_mode_used"] == "vector"
+        assert body["metadata"]["backend"] == "bedrock_knowledge_base"
+        service.retrieve_documents.assert_called_once()
+        service.hybrid_retrieve.assert_not_called()
+
+
+def test_search_mode_hybrid_supported(mock_auth):
+    """searchMode=hybrid + backend supports it → calls hybrid_retrieve()."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_rag_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_rag_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _bedrock_kb_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        service = _mock_service(supports_hybrid=True)
+        p.factory.create_service.return_value = service
+
+        event = _similarity_search_event({"searchMode": "hybrid"})
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert "docs" in body
+        assert "metadata" in body
+        assert body["metadata"]["search_mode"] == "hybrid"
+        assert body["metadata"]["actual_mode_used"] == "hybrid"
+        assert body["metadata"]["hybrid_supported"] is True
+        assert body["metadata"]["backend"] == "bedrock_knowledge_base"
+        service.hybrid_retrieve.assert_called_once()
+        service.retrieve_documents.assert_not_called()
+
+
+def test_search_mode_hybrid_unsupported(mock_auth):
+    """searchMode=hybrid + backend doesn't support it → retrieve_documents() + fallback metadata."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_rag_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_rag_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _opensearch_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        service = _mock_service(supports_hybrid=False)
+        p.factory.create_service.return_value = service
+
+        event = _similarity_search_event({"searchMode": "hybrid", "modelName": "test-model"})
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert "docs" in body
+        assert "metadata" in body
+        assert body["metadata"]["search_mode"] == "hybrid"
+        assert body["metadata"]["actual_mode_used"] == "vector"
+        assert body["metadata"]["hybrid_supported"] is False
+        assert body["metadata"]["backend"] == "opensearch"
+        service.retrieve_documents.assert_called_once()
+        service.hybrid_retrieve.assert_not_called()
+
+
+def test_search_mode_invalid(mock_auth):
+    """Invalid searchMode → 400 ValidationError."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _bedrock_kb_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        p.factory.create_service.return_value = _mock_service()
+
+        event = _similarity_search_event({"searchMode": "foobar"})
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 400
+        body = json.loads(result["body"])
+        assert "searchmode" in body.get("error", "").lower()
+
+
+def test_response_metadata_present(mock_auth):
+    """Hybrid request returns metadata dict with all expected fields."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_rag_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_rag_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _bedrock_kb_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        service = _mock_service(supports_hybrid=True)
+        p.factory.create_service.return_value = service
+
+        event = _similarity_search_event({"searchMode": "hybrid"})
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        metadata = body["metadata"]
+        assert set(metadata.keys()) == {"search_mode", "actual_mode_used", "backend", "hybrid_supported"}
+
+
+def test_hybrid_fallback_with_empty_docs_reports_vector_metadata(mock_auth):
+    """Regression: hybrid fallback returning zero docs must still report actual_mode_used='vector'.
+
+    Previously the handler inferred actual_mode_used / hybrid_supported from docs[0].metadata,
+    which silently dropped to defaults ('hybrid', True) when docs was empty — masking a fallback.
+    """
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_rag_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_rag_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _bedrock_kb_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        service = _mock_service(supports_hybrid=True)
+        # Hybrid call falls back to vector internally and returns zero matches.
+        from lisa.domain.domain_objects import RetrieveResult
+
+        service.hybrid_retrieve.return_value = RetrieveResult(
+            documents=[],
+            actual_mode_used="vector",
+            hybrid_supported=False,
+        )
+        p.factory.create_service.return_value = service
+
+        event = _similarity_search_event({"searchMode": "hybrid"})
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert body["docs"] == []
+        assert body["metadata"]["search_mode"] == "hybrid"
+        assert body["metadata"]["actual_mode_used"] == "vector"
+        assert body["metadata"]["hybrid_supported"] is False
+
+
+def test_backward_compatible_response(mock_auth):
+    """Vector-only request response always includes metadata with search context."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _bedrock_kb_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        service = _mock_service()
+        p.factory.create_service.return_value = service
+
+        event = _similarity_search_event({"searchMode": "vector"})
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert "docs" in body
+        assert "metadata" in body
+        assert body["metadata"]["search_mode"] == "vector"
+        assert body["metadata"]["actual_mode_used"] == "vector"
+        assert body.keys() == {"docs", "metadata"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.3: Weight params end-to-end
+# ---------------------------------------------------------------------------
+
+
+def test_hybrid_search_passes_custom_weights(mock_auth):
+    """vectorWeight/lexicalWeight query params flow through to hybrid_retrieve()."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_rag_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_rag_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _opensearch_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        service = _mock_service(supports_hybrid=True)
+        p.factory.create_service.return_value = service
+
+        event = _similarity_search_event(
+            {
+                "searchMode": "hybrid",
+                "modelName": "test-model",
+                "vectorWeight": "0.8",
+                "lexicalWeight": "0.2",
+            }
+        )
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 200
+        service.hybrid_retrieve.assert_called_once()
+        call_kwargs = service.hybrid_retrieve.call_args.kwargs
+        assert call_kwargs["vector_weight"] == 0.8
+        assert call_kwargs["lexical_weight"] == 0.2
+
+
+def test_hybrid_search_uses_defaults_when_no_weights(mock_auth):
+    """No vectorWeight/lexicalWeight → uses defaults (0.7/0.3)."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_rag_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_rag_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _opensearch_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        service = _mock_service(supports_hybrid=True)
+        p.factory.create_service.return_value = service
+
+        event = _similarity_search_event(
+            {
+                "searchMode": "hybrid",
+                "modelName": "test-model",
+            }
+        )
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 200
+        service.hybrid_retrieve.assert_called_once()
+        call_kwargs = service.hybrid_retrieve.call_args.kwargs
+        assert call_kwargs["vector_weight"] == 0.7
+        assert call_kwargs["lexical_weight"] == 0.3
+
+
+def test_hybrid_search_rejects_non_numeric_weights(mock_auth):
+    """Non-numeric vectorWeight → 400."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_rag_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_rag_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _opensearch_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        p.factory.create_service.return_value = _mock_service(supports_hybrid=True)
+
+        event = _similarity_search_event(
+            {
+                "searchMode": "hybrid",
+                "modelName": "test-model",
+                "vectorWeight": "abc",
+                "lexicalWeight": "0.3",
+            }
+        )
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 400
+
+
+def test_hybrid_search_rejects_weights_not_summing_to_one(mock_auth):
+    """vectorWeight + lexicalWeight != 1 → 400."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_rag_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_rag_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _opensearch_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        p.factory.create_service.return_value = _mock_service(supports_hybrid=True)
+
+        event = _similarity_search_event(
+            {
+                "searchMode": "hybrid",
+                "modelName": "test-model",
+                "vectorWeight": "0.7",
+                "lexicalWeight": "0.7",
+            }
+        )
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 400
+
+
+def test_hybrid_search_rejects_partial_weights(mock_auth):
+    """Only vectorWeight without lexicalWeight → 400."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_rag_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_rag_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _opensearch_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        p.factory.create_service.return_value = _mock_service(supports_hybrid=True)
+
+        event = _similarity_search_event(
+            {
+                "searchMode": "hybrid",
+                "modelName": "test-model",
+                "vectorWeight": "0.8",
+            }
+        )
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 400
+
+
+def test_hybrid_search_rejects_out_of_range_weights(mock_auth):
+    """vectorWeight > 1 → 400."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_rag_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_rag_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _opensearch_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        p.factory.create_service.return_value = _mock_service(supports_hybrid=True)
+
+        event = _similarity_search_event(
+            {
+                "searchMode": "hybrid",
+                "modelName": "test-model",
+                "vectorWeight": "1.5",
+                "lexicalWeight": "-0.5",
+            }
+        )
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 400
+
+
+def test_vector_mode_ignores_weight_params(mock_auth):
+    """searchMode=vector ignores vectorWeight/lexicalWeight — no error, no passthrough."""
+    from repository.lambda_functions import similarity_search
+
+    mock_auth.set_user("test-user", ["test-group"], is_admin=True)
+
+    stack, setup = _hybrid_search_patches(is_admin_val=True)
+    with stack:
+        p = setup()
+        p.vs_repo.find_repository_by_id.return_value = _opensearch_repo()
+        p.cs.get_collection_model.return_value = "test-model"
+        service = _mock_service(supports_hybrid=True)
+        p.factory.create_service.return_value = service
+
+        event = _similarity_search_event(
+            {
+                "searchMode": "vector",
+                "modelName": "test-model",
+                "vectorWeight": "0.9",
+                "lexicalWeight": "0.1",
+            }
+        )
+        result = similarity_search(event, SimpleNamespace())
+
+        assert result["statusCode"] == 200
+        service.retrieve_documents.assert_called_once()
+        service.hybrid_retrieve.assert_not_called()

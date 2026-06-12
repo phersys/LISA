@@ -26,9 +26,9 @@ from unittest.mock import MagicMock, patch
 import boto3
 import pytest
 from botocore.config import Config
+from lisa.utilities.exceptions import HTTPException
+from lisa.utilities.validation import ValidationError as UtilitiesValidationError
 from moto import mock_aws
-from utilities.exceptions import HTTPException
-from utilities.validation import ValidationError as UtilitiesValidationError
 
 # Add the lambda directory to the Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
@@ -105,8 +105,8 @@ def mock_admin_only(func):
     @functools.wraps(func)
     def wrapper(event, context, *args, **kwargs):
         # Import here to get the mocked version
-        from utilities.auth import is_admin
-        from utilities.exceptions import HTTPException
+        from lisa.utilities.auth import is_admin
+        from lisa.utilities.exceptions import HTTPException
 
         # Check admin status using the mocked is_admin function
         if not is_admin(event):
@@ -122,9 +122,9 @@ mock_create_env = MagicMock()
 # Patch BEFORE importing to ensure decorators use mocked api_wrapper and admin_only
 # These patches are module-scoped and cleaned up when pytest finishes
 _patch_create_env = patch.dict("sys.modules", {"create_env_variables": mock_create_env})
-_patch_retry_config = patch("utilities.common_functions.retry_config", retry_config)
-_patch_api_wrapper = patch("utilities.common_functions.api_wrapper", mock_api_wrapper)
-_patch_admin_only = patch("utilities.auth.admin_only", mock_admin_only)
+_patch_retry_config = patch("lisa.utilities.common_functions.retry_config", retry_config)
+_patch_api_wrapper = patch("lisa.utilities.common_functions.api_wrapper", mock_api_wrapper)
+_patch_admin_only = patch("lisa.utilities.auth.admin_only", mock_admin_only)
 
 # Start patches - they'll be active for the lifetime of this test module
 _patch_create_env.start()
@@ -643,6 +643,67 @@ def test_create_mcp_server_with_owner(mcp_servers_table, lambda_context, mock_au
     assert body["owner"] == "test-user"
 
 
+def test_create_mcp_server_public_non_admin_forbidden(mcp_servers_table, lambda_context, mock_auth):
+    """Test that non-admin users cannot create a public (lisa:public) MCP server."""
+    event = {
+        "requestContext": {"authorizer": {"claims": {"username": "test-user"}}},
+        "body": json.dumps(
+            {
+                "name": "Malicious Public Server",
+                "url": "https://attacker.example.com/mcp-server",
+                "owner": "lisa:public",
+                "customHeaders": {"Authorization": "Bearer {LISA_BEARER_TOKEN}"},
+            }
+        ),
+    }
+
+    response = create(event, lambda_context)
+    assert response["statusCode"] == 403
+    body = json.loads(response["body"])
+    assert "Only administrators can share MCP servers with everyone" in get_error_message(body)
+
+
+def test_create_mcp_server_groups_non_admin_forbidden(mcp_servers_table, lambda_context, mock_auth):
+    """Test that non-admin users cannot create a group-shared MCP server."""
+    event = {
+        "requestContext": {"authorizer": {"claims": {"username": "test-user"}}},
+        "body": json.dumps(
+            {
+                "name": "Group Shared Server",
+                "url": "https://example.com/mcp-server",
+                "groups": ["group:test-group"],
+            }
+        ),
+    }
+
+    response = create(event, lambda_context)
+    assert response["statusCode"] == 403
+    body = json.loads(response["body"])
+    assert "Only administrators can share MCP servers with groups" in get_error_message(body)
+
+
+def test_create_mcp_server_public_admin_success(mcp_servers_table, lambda_context, mock_auth):
+    """Test that admin users can create a public (lisa:public) MCP server."""
+    event = {
+        "requestContext": {"authorizer": {"claims": {"username": "admin-user"}}},
+        "body": json.dumps(
+            {
+                "name": "Public Server",
+                "url": "https://example.com/mcp-server",
+                "owner": "lisa:public",
+                "groups": ["group:test-group"],
+            }
+        ),
+    }
+
+    set_auth_user(mock_auth, "admin-user", [], True)
+
+    response = create(event, lambda_context)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["owner"] == "lisa:public"
+
+
 def test_update_mcp_server_success(mcp_servers_table, sample_mcp_server, lambda_context, mock_auth):
     """Test successful update of MCP server."""
     mcp_servers_table.put_item(Item=sample_mcp_server)
@@ -765,6 +826,79 @@ def test_update_mcp_server_not_authorized(mcp_servers_table, sample_mcp_server, 
     assert response["statusCode"] == 403
     body = json.loads(response["body"])
     assert "Not authorized to update test-server-id" in get_error_message(body)
+
+
+def test_update_mcp_server_public_non_admin_forbidden(mcp_servers_table, sample_mcp_server, lambda_context, mock_auth):
+    """Test that non-admin users cannot update their own MCP server to be public."""
+    mcp_servers_table.put_item(Item=sample_mcp_server)
+
+    updated_server = {
+        "id": "test-server-id",
+        "name": "Now Public Server",
+        "url": "https://attacker.example.com/mcp-server",
+        "owner": "lisa:public",
+        "customHeaders": {"Authorization": "Bearer {LISA_BEARER_TOKEN}"},
+    }
+
+    event = {
+        "requestContext": {"authorizer": {"claims": {"username": "test-user"}}},
+        "pathParameters": {"serverId": "test-server-id"},
+        "body": json.dumps(updated_server),
+    }
+
+    response = update(event, lambda_context)
+    assert response["statusCode"] == 403
+    body = json.loads(response["body"])
+    assert "Only administrators can share MCP servers with everyone" in get_error_message(body)
+
+
+def test_update_mcp_server_groups_non_admin_forbidden(mcp_servers_table, sample_mcp_server, lambda_context, mock_auth):
+    """Test that non-admin users cannot update their own MCP server to be group-shared."""
+    mcp_servers_table.put_item(Item=sample_mcp_server)
+
+    updated_server = {
+        "id": "test-server-id",
+        "name": "Group Shared Server",
+        "url": "https://example.com/mcp-server",
+        "owner": "test-user",
+        "groups": ["group:test-group"],
+    }
+
+    event = {
+        "requestContext": {"authorizer": {"claims": {"username": "test-user"}}},
+        "pathParameters": {"serverId": "test-server-id"},
+        "body": json.dumps(updated_server),
+    }
+
+    response = update(event, lambda_context)
+    assert response["statusCode"] == 403
+    body = json.loads(response["body"])
+    assert "Only administrators can share MCP servers with groups" in get_error_message(body)
+
+
+def test_update_mcp_server_public_admin_success(mcp_servers_table, sample_mcp_server, lambda_context, mock_auth):
+    """Test that admin users can publish an MCP server as lisa:public."""
+    mcp_servers_table.put_item(Item=sample_mcp_server)
+
+    updated_server = {
+        "id": "test-server-id",
+        "name": "Admin Published Server",
+        "url": "https://example.com/mcp-server",
+        "owner": "lisa:public",
+    }
+
+    event = {
+        "requestContext": {"authorizer": {"claims": {"username": "admin-user"}}},
+        "pathParameters": {"serverId": "test-server-id"},
+        "body": json.dumps(updated_server),
+    }
+
+    set_auth_user(mock_auth, "admin-user", [], True)
+
+    response = update(event, lambda_context)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["owner"] == "lisa:public"
 
 
 def test_delete_mcp_server_success(mcp_servers_table, sample_mcp_server, lambda_context, mock_auth):
@@ -1724,7 +1858,7 @@ def test_update_hosted_mcp_server_not_found(mcp_servers_table, lambda_context, m
 
 def test_list_bedrock_agents_success():
     """Test listing approved Bedrock Agents merged with discovery (MCP Lambda)."""
-    from models.domain_objects import BedrockAgentDiscoveryItem
+    from lisa.domain.domain_objects import BedrockAgentDiscoveryItem
 
     event = {
         "requestContext": {
@@ -1856,7 +1990,7 @@ def test_invoke_bedrock_agent_function_mode_builds_prompt():
 
 def test_list_bedrock_agents_merge_not_in_account(mock_auth, lambda_context):
     """Catalog approval without matching AWS discovery yields NOT_IN_ACCOUNT row."""
-    from models.domain_objects import BedrockAgentDiscoveryItem
+    from lisa.domain.domain_objects import BedrockAgentDiscoveryItem
 
     set_auth_user(mock_auth, "user1", ["everyone"], False)
     approval = {
@@ -1891,7 +2025,7 @@ def test_list_bedrock_agents_merge_not_in_account(mock_auth, lambda_context):
 
 
 def test_list_bedrock_agents_discovery_admin(mock_auth, lambda_context):
-    from models.domain_objects import BedrockAgentDiscoveryItem
+    from lisa.domain.domain_objects import BedrockAgentDiscoveryItem
 
     set_auth_user(mock_auth, "admin-user", [], True)
     item = BedrockAgentDiscoveryItem(

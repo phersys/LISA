@@ -17,7 +17,6 @@
 import { createApi } from '@reduxjs/toolkit/query/react';
 import { lisaBaseQuery } from '@/shared/reducers/reducer.utils';
 import { PaginatedDocumentResponse } from '@/components/types';
-import { Document } from '@langchain/core/documents';
 import {
     RagRepositoryConfig,
     ChunkingStrategy,
@@ -27,6 +26,10 @@ import {
 export type S3UploadRequest = {
     url: string;
     body: any;
+};
+
+export type ListRagRepositoryResponse = RagRepositoryConfig & {
+    supportsHybridSearch?: boolean;
 };
 
 type IngestDocumentRequest = {
@@ -57,6 +60,24 @@ type RelevantDocRequest = {
     query: string,
     topK: number,
     modelName?: string,
+    searchMode?: 'vector' | 'hybrid',
+    vectorWeight?: number,
+    lexicalWeight?: number,
+};
+
+export type RelevantDocumentsResponse = {
+    docs: Array<{
+        Document: {
+            page_content: string;
+            metadata: Record<string, any>;
+        };
+    }>;
+    metadata?: {
+        search_mode: string;
+        actual_mode_used: string;
+        backend: string;
+        hybrid_supported: boolean;
+    };
 };
 
 type ListRagDocumentRequest = {
@@ -177,11 +198,11 @@ export const ragApi = createApi({
     reducerPath: 'rag',
     baseQuery: lisaBaseQuery(),
     tagTypes: ['repositories', 'docs', 'repository-status', 'jobs', 'collections'],
-    refetchOnFocus: true,
-    refetchOnMountOrArgChange: true,
-    keepUnusedDataFor: 60, // Keep cache for 60s to prevent cancellation during rapid navigation
+    refetchOnFocus: false,
+    refetchOnMountOrArgChange: 30,
+    keepUnusedDataFor: 300,
     endpoints: (builder) => ({
-        listRagRepositories: builder.query<RagRepositoryConfig[], void>({
+        listRagRepositories: builder.query<ListRagRepositoryResponse[], void>({
             query: () => ({
                 url: '/repository'
             }),
@@ -217,17 +238,30 @@ export const ragApi = createApi({
                 data: body
             }),
         }),
-        getRelevantDocuments: builder.query<Document[], RelevantDocRequest>({
+        getRelevantDocuments: builder.query<RelevantDocumentsResponse, RelevantDocRequest>({
             query: (request) => {
                 const params: any = {
                     query: request.query,
-                    topK: request.topK
+                    topK: request.topK,
+                    // Always request scores — needed for metadata panel display and zero-cost from Bedrock
+                    score: 'true',
                 };
 
                 if (request.collectionId) {
                     params.collectionId = request.collectionId;
                 } else if (request.modelName) {
                     params.modelName = request.modelName;
+                }
+
+                if (request.searchMode && request.searchMode !== 'vector') {
+                    params.searchMode = request.searchMode;
+                }
+
+                if (request.vectorWeight != null) {
+                    params.vectorWeight = request.vectorWeight.toString();
+                }
+                if (request.lexicalWeight != null) {
+                    params.lexicalWeight = request.lexicalWeight.toString();
                 }
 
                 const queryString = new URLSearchParams(params).toString();
