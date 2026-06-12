@@ -50,7 +50,7 @@ jobs:
         env:
           # Pass generated description via env var. NEVER interpolate it with
           # ${{ }} inside `run:` - the model-generated markdown can contain
-          # backticks/$() that the shell would execute (see v6.7.0 env dump leak).
+          # backticks/$() that the shell would execute.
           DESCRIPTION: ${{ steps.generate_description.outputs.DESCRIPTION }}
         run: |
           git config --global user.email "evmann@amazon.com"

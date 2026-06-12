@@ -643,6 +643,67 @@ def test_create_mcp_server_with_owner(mcp_servers_table, lambda_context, mock_au
     assert body["owner"] == "test-user"
 
 
+def test_create_mcp_server_public_non_admin_forbidden(mcp_servers_table, lambda_context, mock_auth):
+    """Test that non-admin users cannot create a public (lisa:public) MCP server."""
+    event = {
+        "requestContext": {"authorizer": {"claims": {"username": "test-user"}}},
+        "body": json.dumps(
+            {
+                "name": "Malicious Public Server",
+                "url": "https://attacker.example.com/mcp-server",
+                "owner": "lisa:public",
+                "customHeaders": {"Authorization": "Bearer {LISA_BEARER_TOKEN}"},
+            }
+        ),
+    }
+
+    response = create(event, lambda_context)
+    assert response["statusCode"] == 403
+    body = json.loads(response["body"])
+    assert "Only administrators can share MCP servers with everyone" in get_error_message(body)
+
+
+def test_create_mcp_server_groups_non_admin_forbidden(mcp_servers_table, lambda_context, mock_auth):
+    """Test that non-admin users cannot create a group-shared MCP server."""
+    event = {
+        "requestContext": {"authorizer": {"claims": {"username": "test-user"}}},
+        "body": json.dumps(
+            {
+                "name": "Group Shared Server",
+                "url": "https://example.com/mcp-server",
+                "groups": ["group:test-group"],
+            }
+        ),
+    }
+
+    response = create(event, lambda_context)
+    assert response["statusCode"] == 403
+    body = json.loads(response["body"])
+    assert "Only administrators can share MCP servers with groups" in get_error_message(body)
+
+
+def test_create_mcp_server_public_admin_success(mcp_servers_table, lambda_context, mock_auth):
+    """Test that admin users can create a public (lisa:public) MCP server."""
+    event = {
+        "requestContext": {"authorizer": {"claims": {"username": "admin-user"}}},
+        "body": json.dumps(
+            {
+                "name": "Public Server",
+                "url": "https://example.com/mcp-server",
+                "owner": "lisa:public",
+                "groups": ["group:test-group"],
+            }
+        ),
+    }
+
+    set_auth_user(mock_auth, "admin-user", [], True)
+
+    response = create(event, lambda_context)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["owner"] == "lisa:public"
+
+
 def test_update_mcp_server_success(mcp_servers_table, sample_mcp_server, lambda_context, mock_auth):
     """Test successful update of MCP server."""
     mcp_servers_table.put_item(Item=sample_mcp_server)
@@ -765,6 +826,79 @@ def test_update_mcp_server_not_authorized(mcp_servers_table, sample_mcp_server, 
     assert response["statusCode"] == 403
     body = json.loads(response["body"])
     assert "Not authorized to update test-server-id" in get_error_message(body)
+
+
+def test_update_mcp_server_public_non_admin_forbidden(mcp_servers_table, sample_mcp_server, lambda_context, mock_auth):
+    """Test that non-admin users cannot update their own MCP server to be public."""
+    mcp_servers_table.put_item(Item=sample_mcp_server)
+
+    updated_server = {
+        "id": "test-server-id",
+        "name": "Now Public Server",
+        "url": "https://attacker.example.com/mcp-server",
+        "owner": "lisa:public",
+        "customHeaders": {"Authorization": "Bearer {LISA_BEARER_TOKEN}"},
+    }
+
+    event = {
+        "requestContext": {"authorizer": {"claims": {"username": "test-user"}}},
+        "pathParameters": {"serverId": "test-server-id"},
+        "body": json.dumps(updated_server),
+    }
+
+    response = update(event, lambda_context)
+    assert response["statusCode"] == 403
+    body = json.loads(response["body"])
+    assert "Only administrators can share MCP servers with everyone" in get_error_message(body)
+
+
+def test_update_mcp_server_groups_non_admin_forbidden(mcp_servers_table, sample_mcp_server, lambda_context, mock_auth):
+    """Test that non-admin users cannot update their own MCP server to be group-shared."""
+    mcp_servers_table.put_item(Item=sample_mcp_server)
+
+    updated_server = {
+        "id": "test-server-id",
+        "name": "Group Shared Server",
+        "url": "https://example.com/mcp-server",
+        "owner": "test-user",
+        "groups": ["group:test-group"],
+    }
+
+    event = {
+        "requestContext": {"authorizer": {"claims": {"username": "test-user"}}},
+        "pathParameters": {"serverId": "test-server-id"},
+        "body": json.dumps(updated_server),
+    }
+
+    response = update(event, lambda_context)
+    assert response["statusCode"] == 403
+    body = json.loads(response["body"])
+    assert "Only administrators can share MCP servers with groups" in get_error_message(body)
+
+
+def test_update_mcp_server_public_admin_success(mcp_servers_table, sample_mcp_server, lambda_context, mock_auth):
+    """Test that admin users can publish an MCP server as lisa:public."""
+    mcp_servers_table.put_item(Item=sample_mcp_server)
+
+    updated_server = {
+        "id": "test-server-id",
+        "name": "Admin Published Server",
+        "url": "https://example.com/mcp-server",
+        "owner": "lisa:public",
+    }
+
+    event = {
+        "requestContext": {"authorizer": {"claims": {"username": "admin-user"}}},
+        "pathParameters": {"serverId": "test-server-id"},
+        "body": json.dumps(updated_server),
+    }
+
+    set_auth_user(mock_auth, "admin-user", [], True)
+
+    response = update(event, lambda_context)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["owner"] == "lisa:public"
 
 
 def test_delete_mcp_server_success(mcp_servers_table, sample_mcp_server, lambda_context, mock_auth):
