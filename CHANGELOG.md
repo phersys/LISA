@@ -1,22 +1,12 @@
 # v6.7.1
 
-## Key Features
+## Dependency Updates
 
-### Version Bump to v6.7.1
-This release represents a targeted patch update to the LISA platform, incrementing the version from v6.7.0 to v6.7.1. Patch releases in the LISA versioning scheme are focused on stability improvements, bug fixes, and minor refinements that maintain full backward compatibility with the v6.7.x series.
-
-**Release Characteristics:**
-- **Versioning**: Follows semantic versioning conventions, indicating a non-breaking patch-level update
-- **Compatibility**: Fully backward compatible with existing v6.7.0 deployments and configurations
-- **Stability**: Focused on incremental improvements and corrections over the previous release
-
-## Key Changes
-- **Version Control**: Updated project version identifier from `v6.7.0` to `v6.7.1` across all relevant version definition files and package manifests
-- **Release Tracking**: Established the `v6.7.1` release tag for changelog, audit trail, and deployment tracking purposes
-- **Patch Continuity**: Maintained API and configuration compatibility with the v6.7.0 baseline while incorporating targeted refinements
+- Resolved Dependabot security findings across npm, Python, and GitHub Actions.
+- Upgraded LiteLLM to 1.86.2 to address a CVE (CVE-2026-49468).
 
 ## Acknowledgements
-* @github_actions_lisa
+* @estohlmann
 
 **Full Changelog**: https://github.com/awslabs/LISA/compare/v6.7.0..v6.7.1
 
